@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-midnight-950 text-slate-200 font-body antialiased;
+  background-image:
+    radial-gradient(circle at 15% 10%, rgba(47, 143, 255, 0.06), transparent 40%),
+    radial-gradient(circle at 85% 90%, rgba(47, 86, 224, 0.05), transparent 40%);
+}
+
+/* Scrollbar customizada, tema navy */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #1f2f5c;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2f56e0;
+}
+
+/* Avatar animado da Ley (LeyAvatar.tsx) — orbe girando + pulsando, no mesmo
+   espírito visual do indicador de voz. Fica no CSS global (não inline em
+   cada instância) porque o avatar se repete em toda mensagem do chat. */
+@keyframes ley-orb-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes ley-orb-pulse {
+  0%, 100% { filter: brightness(1) saturate(1); }
+  50% { filter: brightness(1.25) saturate(1.15); }
+}

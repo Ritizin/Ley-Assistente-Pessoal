@@ -1,0 +1,18 @@
+node_modules/
+dist/
+
+# segredos — NUNCA committar
+.env
+.env.*
+!.env.example
+
+# dados de runtime: sessão do WhatsApp, bancos SQLite (ley.db, auth.db),
+# mídia recebida — tudo isso é gerado em runtime e, no Render, deve viver
+# num Persistent Disk, não no git
+storage/
+
+# Piper baixado pelo scripts/render-build.sh a cada deploy — não precisa
+# (e não deve) ir pro repositório
+vendor/
+
+*.log
