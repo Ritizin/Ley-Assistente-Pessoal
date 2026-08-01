@@ -25,7 +25,11 @@ PIPER_VOICE_LOCALE="${PIPER_VOICE_LOCALE:-pt_BR}"
 VENDOR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/vendor/piper"
 
 echo "==> Instalando dependências e compilando o backend..."
-npm ci
+# --include=dev é necessário mesmo com NODE_ENV=production setado (usamos
+# esse valor de propósito pra runtime) — sem isso, o npm ci pula os
+# devDependencies (typescript, tsx, todos os @types/*), e o build quebra
+# com "Could not find a declaration file for module 'X'" pra várias libs.
+npm ci --include=dev
 npm run build
 
 echo "==> Preparando o Piper TTS em ${VENDOR_DIR}..."
