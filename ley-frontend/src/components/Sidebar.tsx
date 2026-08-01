@@ -76,8 +76,23 @@ export default function Sidebar({
           </nav>
         </div>
 
+        <div
+          className={`flex items-center gap-2 rounded-lg border px-3 py-2.5 text-xs ${
+            wsConnected ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-rose-500/20 bg-rose-500/5'
+          }`}
+        >
+          <Circle
+            size={8}
+            fill={wsConnected ? '#10b981' : '#f43f5e'}
+            className={wsConnected ? 'text-emerald-500 animate-pulseDot' : 'text-rose-500 animate-pulseDot'}
+          />
+          <span className={wsConnected ? 'text-emerald-400' : 'text-rose-400'}>
+            {wsConnected ? 'Servidor Online' : 'Servidor Off'}
+          </span>
+        </div>
+
         {userLabel && (
-          <div className="mb-2 flex items-center gap-2 rounded-lg border border-white/5 bg-midnight-800/60 px-3 py-2.5 text-xs">
+          <div className="mt-2 flex items-center gap-2 rounded-lg border border-white/5 bg-midnight-800/60 px-3 py-2.5 text-xs">
             <span className="flex-1 truncate text-slate-400">{userLabel}</span>
             <button
               onClick={onLogout}
@@ -89,17 +104,6 @@ export default function Sidebar({
             </button>
           </div>
         )}
-
-        <div className="flex items-center gap-2 rounded-lg border border-white/5 bg-midnight-800/60 px-3 py-2.5 text-xs">
-          <Circle
-            size={8}
-            fill={wsConnected ? '#2f8fff' : '#475569'}
-            className={wsConnected ? 'text-electric-500 animate-pulseDot' : 'text-slate-600'}
-          />
-          <span className="text-slate-400">
-            {wsConnected ? 'Servidor conectado' : 'Conectando ao servidor...'}
-          </span>
-        </div>
       </aside>
 
       {/* ===== Mobile: barra superior compacta (< md) ===== */}

@@ -6,8 +6,6 @@ import {
   CheckCheck,
   Users,
   MessageSquareText,
-  BookmarkCheck,
-  Eye,
   ArrowLeft,
   Paperclip,
   FileText,
@@ -416,7 +414,7 @@ export default function WhatsAppTab({ onWhatsAppEvent, focusJid, focusName, onFo
                 }`}
               >
                 <MessageSquareText size={14} />
-                Mensagens
+                Contatos
               </button>
               <button
                 onClick={() => setView('contacts')}
@@ -425,7 +423,7 @@ export default function WhatsAppTab({ onWhatsAppEvent, focusJid, focusName, onFo
                 }`}
               >
                 <Users size={14} />
-                Contatos
+                Grupos
               </button>
             </div>
           )}
@@ -446,18 +444,20 @@ export default function WhatsAppTab({ onWhatsAppEvent, focusJid, focusName, onFo
           {contactsLoading && contacts.length === 0 ? (
             <div className="flex items-center justify-center gap-2 pt-10 text-sm text-slate-500">
               <Loader2 size={16} className="animate-spin" />
-              Carregando contatos...
+              Carregando grupos...
             </div>
           ) : contactsError ? (
             <p className="text-center text-sm text-red-400">{contactsError}</p>
-          ) : contacts.length === 0 ? (
+          ) : contacts.filter((c) => c.is_group).length === 0 ? (
             <p className="text-center text-sm text-slate-500">
-              Nenhum contato ainda. Contatos aparecem aqui quando alguém te manda mensagem, ou quando você pede pra Ley
-              salvar ("salva o contato Fulano, 11999998888").
+              Nenhum grupo ainda. Grupos aparecem aqui quando alguém te manda mensagem neles, ou quando você pede pra
+              Ley criar um.
             </p>
           ) : (
             <div className="mx-auto flex max-w-2xl flex-col gap-2">
-              {contacts.map((c) => (
+              {contacts
+                .filter((c) => c.is_group)
+                .map((c) => (
                 <button
                   key={c.jid}
                   onClick={() => loadConversation(c.jid, c.name)}
@@ -465,19 +465,11 @@ export default function WhatsAppTab({ onWhatsAppEvent, focusJid, focusName, onFo
                 >
                   <div>
                     <p className="font-medium text-slate-100">{c.name ?? c.jid.split('@')[0]}</p>
-                    <p className="text-xs text-slate-500">
-                      {c.is_group ? 'grupo' : `+${c.jid.split('@')[0]}`}
-                    </p>
+                    <p className="text-xs text-slate-500">grupo</p>
                   </div>
-                  <span
-                    className={`flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-medium ${
-                      c.source === 'saved'
-                        ? 'bg-electric-500/10 text-electric-400 ring-1 ring-electric-500/30'
-                        : 'bg-slate-700/40 text-slate-400 ring-1 ring-white/5'
-                    }`}
-                  >
-                    {c.is_group ? <Users size={11} /> : c.source === 'saved' ? <BookmarkCheck size={11} /> : <Eye size={11} />}
-                    {c.is_group ? 'grupo' : c.source === 'saved' ? 'salvo' : 'visto'}
+                  <span className="flex items-center gap-1 rounded-full bg-slate-700/40 px-2 py-1 text-[10px] font-medium text-slate-400 ring-1 ring-white/5">
+                    <Users size={11} />
+                    grupo
                   </span>
                 </button>
               ))}
@@ -488,11 +480,13 @@ export default function WhatsAppTab({ onWhatsAppEvent, focusJid, focusName, onFo
 
       {status === 'connected' && view === 'messages' && (
         <div className="flex-1 overflow-y-auto px-4 py-4">
-          {conversations.length === 0 ? (
-            <p className="pt-10 text-center text-sm text-slate-500">Nenhuma mensagem ainda.</p>
+          {conversations.filter((c) => !c.isGroup).length === 0 ? (
+            <p className="pt-10 text-center text-sm text-slate-500">Nenhuma conversa individual ainda.</p>
           ) : (
             <div className="mx-auto flex max-w-2xl flex-col gap-1">
-              {conversations.map((c) => {
+              {conversations
+                .filter((c) => !c.isGroup)
+                .map((c) => {
                 const displayName = c.name ?? `+${c.jid.split('@')[0]}`
                 const preview =
                   c.last.type === 'audio'
