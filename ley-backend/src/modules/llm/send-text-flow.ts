@@ -33,6 +33,18 @@ const START_NO_CONTACT_RE = /\b(manda|mandar|envia|enviar|escreve|escrever)\b.*\
 const CANCEL_RE = /^(cancela|cancelar|deixa pra l[áa]|esquece(?:\s+isso)?)\b/i;
 const SKIP_SAVE_RE = /^(n[ãa]o|n[ãa]o precisa|deixa|pode deixar|dispensa)\b/i;
 
+// BUG corrigido aqui: o passo "aguardando_nome_para_salvar" aceitava
+// QUALQUER texto de 2-80 caracteres como nome do contato — se o usuário,
+// em vez de responder com um nome, mandasse uma pergunta/frase sobre outro
+// assunto (ex: "e mensagem nos grupos?"), isso virava o "nome" salvo,
+// bagunçando o contato e confundindo a conversa seguinte. Agora só aceita
+// como nome algo que minimamente parece um nome de verdade.
+function looksLikePlausibleName(text: string): boolean {
+  if (text.includes("?")) return false;
+  const wordCount = text.trim().split(/\s+/).length;
+  return wordCount <= 5; // nome de pessoa raramente passa de 4-5 palavras
+}
+
 // separa "nome do contato" de "conteúdo da mensagem" quando vêm na mesma frase,
 // ex: "manda uma mensagem pra Maria dizendo bom dia" ou "manda pro João: chegando em 10"
 const CONTENT_SPLIT_RE = /^(.*?)\s*(?::|,|\bdizendo\b|\bfalando\b|\bavisando\b)\s*(.+)$/i;
@@ -154,8 +166,13 @@ export async function handleSendTextFlow(
     }
 
     const name = message.trim();
-    if (name.length < 2 || name.length > 80) {
-      return "Esse nome não parece válido. Manda de novo com o nome completo.";
+    if (name.length < 2 || name.length > 80 || !looksLikePlausibleName(name)) {
+      // não parece um nome de verdade — o usuário provavelmente mudou de
+      // assunto. Cancela sem confirmar nada e deixa a mensagem seguir pro
+      // fluxo normal (é isso que evita o bug de "salvar" uma pergunta como
+      // nome de contato).
+      pending.delete(conversationId);
+      return null;
     }
 
     // mesmo princípio do save-contact-flow: só confirma "salvei" depois que

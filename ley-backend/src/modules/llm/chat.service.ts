@@ -89,6 +89,82 @@ export async function processChatMessage(input: ChatRequest): Promise<ChatResult
     return { conversationId, reply };
   }
 
+  // BUG corrigido aqui: handleSendAudioFlow/handleSendTextFlow/handleSendFileFlow
+  // mantêm estado pendente por conversa (ex: "aguardando o nome pra salvar o
+  // contato depois de mandar mensagem pra um número novo"). Antes, esses 3
+  // fluxos rodavam DEPOIS dos fluxos sem estado (save-contact, create-group,
+  // block-contact, task, whatsapp-inbox, open-conversation) — então se a
+  // PRÓXIMA mensagem do usuário batesse com a regex de um fluxo sem estado
+  // (ex: perguntar "e mensagem nos grupos?" logo depois de "quer que eu
+  // salve esse contato?"), o fluxo sem estado respondia primeiro e o estado
+  // pendente ficava "preso", sendo consumido erroneamente só na mensagem
+  // seguinte (a Ley "salvava um contato" com o texto de uma pergunta sem
+  // relação nenhuma). Agora os 3 fluxos com estado são checados PRIMEIRO,
+  // garantindo que uma conversa em andamento sempre tem prioridade.
+
+  // Fluxo de "manda um áudio pra fulano": se a mensagem pertence a esse fluxo
+  // (iniciando ou continuando uma conversa já em andamento), responde direto
+  // sem passar pelo modelo.
+  const flowReply = await handleSendAudioFlow(conversationId, input.message);
+
+  if (flowReply !== null) {
+    addMessage(conversationId, "assistant", flowReply);
+    touchConversation(conversationId);
+
+    wsHub.broadcast("chat", "message", {
+      conversationId,
+      role: "assistant",
+      content: flowReply,
+    });
+
+    logger.debug({ conversationId }, "mensagem tratada pelo fluxo de envio de áudio");
+
+    return {
+      conversationId,
+      reply: flowReply,
+      awaitingVoiceRecording: getPending(conversationId)?.step === "aguardando_gravacao",
+    };
+  }
+
+  // Fluxo de "manda uma mensagem/msg pra fulano": mesma ideia do fluxo de
+  // áudio acima, mas envia texto puro pelo WhatsApp sem precisar de TTS/gravação.
+  const textFlowReply = await handleSendTextFlow(conversationId, input.message);
+
+  if (textFlowReply !== null) {
+    addMessage(conversationId, "assistant", textFlowReply);
+    touchConversation(conversationId);
+
+    wsHub.broadcast("chat", "message", {
+      conversationId,
+      role: "assistant",
+      content: textFlowReply,
+    });
+
+    logger.debug({ conversationId }, "mensagem tratada pelo fluxo de envio de texto");
+
+    return { conversationId, reply: textFlowReply };
+  }
+
+  // Fluxo de "manda esse arquivo pra fulano": manda o último arquivo anexado
+  // no chat pro WhatsApp (pessoa ou grupo) — mesma ideia dos fluxos de texto
+  // e áudio acima.
+  const fileFlowReply = await handleSendFileFlow(conversationId, input.message);
+
+  if (fileFlowReply !== null) {
+    addMessage(conversationId, "assistant", fileFlowReply);
+    touchConversation(conversationId);
+
+    wsHub.broadcast("chat", "message", {
+      conversationId,
+      role: "assistant",
+      content: fileFlowReply,
+    });
+
+    logger.debug({ conversationId }, "mensagem tratada pelo fluxo de envio de arquivo");
+
+    return { conversationId, reply: fileFlowReply };
+  }
+
   // Fluxo de "salva/memoriza o contato fulano com o número X": trata antes dos
   // fluxos de envio pra poder gravar o contato e já deixar disponível pros dois.
   const saveContactReply = await handleSaveContactFlow(input.message);
@@ -185,9 +261,7 @@ export async function processChatMessage(input: ChatRequest): Promise<ChatResult
   }
 
   // Fluxo de "abre a conversa/o grupo com fulano": pede pro painel abrir
-  // aquela conversa específica. Roda antes dos fluxos de envio pra não ser
-  // confundido com "manda uma mensagem" (palavras-chave diferentes, mas
-  // mantém a mesma ordem de prioridade dos fluxos de WhatsApp).
+  // aquela conversa específica.
   const openConversationReply = handleOpenConversationFlow(input.message);
 
   if (openConversationReply !== null) {
@@ -203,69 +277,6 @@ export async function processChatMessage(input: ChatRequest): Promise<ChatResult
     logger.debug({ conversationId }, "mensagem tratada pelo fluxo de abrir conversa do WhatsApp");
 
     return { conversationId, reply: openConversationReply };
-  }
-
-  // Fluxo de "manda um áudio pra fulano": se a mensagem pertence a esse fluxo
-  // (iniciando ou continuando uma conversa já em andamento), responde direto
-  // sem passar pelo modelo — mesmo princípio da lógica de tarefas acima.
-  const flowReply = await handleSendAudioFlow(conversationId, input.message);
-
-  if (flowReply !== null) {
-    addMessage(conversationId, "assistant", flowReply);
-    touchConversation(conversationId);
-
-    wsHub.broadcast("chat", "message", {
-      conversationId,
-      role: "assistant",
-      content: flowReply,
-    });
-
-    logger.debug({ conversationId }, "mensagem tratada pelo fluxo de envio de áudio");
-
-    return {
-      conversationId,
-      reply: flowReply,
-      awaitingVoiceRecording: getPending(conversationId)?.step === "aguardando_gravacao",
-    };
-  }
-
-  // Fluxo de "manda uma mensagem/msg pra fulano": mesma ideia do fluxo de
-  // áudio acima, mas envia texto puro pelo WhatsApp sem precisar de TTS/gravação.
-  const textFlowReply = await handleSendTextFlow(conversationId, input.message);
-
-  if (textFlowReply !== null) {
-    addMessage(conversationId, "assistant", textFlowReply);
-    touchConversation(conversationId);
-
-    wsHub.broadcast("chat", "message", {
-      conversationId,
-      role: "assistant",
-      content: textFlowReply,
-    });
-
-    logger.debug({ conversationId }, "mensagem tratada pelo fluxo de envio de texto");
-
-    return { conversationId, reply: textFlowReply };
-  }
-
-  // Fluxo de "manda esse arquivo pra fulano": manda o último arquivo anexado
-  // no chat pro WhatsApp (pessoa ou grupo) — mesma ideia dos fluxos de texto
-  // e áudio acima.
-  const fileFlowReply = await handleSendFileFlow(conversationId, input.message);
-
-  if (fileFlowReply !== null) {
-    addMessage(conversationId, "assistant", fileFlowReply);
-    touchConversation(conversationId);
-
-    wsHub.broadcast("chat", "message", {
-      conversationId,
-      role: "assistant",
-      content: fileFlowReply,
-    });
-
-    logger.debug({ conversationId }, "mensagem tratada pelo fluxo de envio de arquivo");
-
-    return { conversationId, reply: fileFlowReply };
   }
 
   // Fluxo de comandos do Spotify ("toca X", "pausa", "próxima música"...)
