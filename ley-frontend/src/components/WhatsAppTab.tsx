@@ -200,6 +200,23 @@ export default function WhatsAppTab({ onWhatsAppEvent, focusJid, focusName, onFo
     if (status === 'connected' && view === 'contacts') loadContacts()
   }, [status, view, loadContacts])
 
+  // busca o status atual assim que a aba monta — o snapshot do WS só chega
+  // UMA VEZ quando o socket abre (que pode ter sido antes dessa aba existir),
+  // então sem isso o painel podia ficar preso em "Iniciando conexão..." pra
+  // sempre mesmo já conectado.
+  useEffect(() => {
+    fetch(`${API_BASE}/api/whatsapp/status`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.status) {
+          setStatus(data.status)
+          if (data.status === 'qr_pending' && data.qr) setQr(data.qr)
+          if (data.status === 'connected' && data.number) setNumber(data.number)
+        }
+      })
+      .catch(() => {})
+  }, [])
+
   useEffect(() => {
     const unsubscribe = onWhatsAppEvent((event, data) => {
       if (event === 'status' && data?.status) {

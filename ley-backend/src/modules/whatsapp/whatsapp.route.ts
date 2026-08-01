@@ -57,6 +57,14 @@ const openBodySchema = z
   .refine((data) => data.jid || data.contact, { message: "informe jid ou contact" });
 
 export async function whatsappRoutes(app: FastifyInstance): Promise<void> {
+  // BUG corrigido aqui: o painel só sabia o status da conexão pelo snapshot
+  // que o WS manda UMA VEZ quando o socket abre. Se a aba WhatsApp fosse
+  // montada DEPOIS desse snapshot (ex: usuário abriu o Chat primeiro e só
+  // depois clicou em WhatsApp), o componente perdia esse evento único e
+  // ficava preso em "Iniciando conexão..." pra sempre, mesmo já conectado.
+  // Essa rota deixa o frontend perguntar o status atual a qualquer momento.
+  app.get("/api/whatsapp/status", async () => whatsappService.getSnapshot());
+
   // lista as mensagens mais recentes (ou só as não vistas, com ?unread=true)
   app.get("/api/whatsapp/messages", async (req) => {
     const { unread } = req.query as { unread?: string };
