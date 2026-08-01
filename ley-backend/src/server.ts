@@ -19,6 +19,7 @@ import { registerSpotifyModule, initSpotify } from "./modules/spotify/index.js";
 import { registerInstagramModule, initInstagram } from "./modules/instagram/index.js";
 import { registerGoogleHomeModule, initGoogleHome } from "./modules/google-home/index.js";
 import { registerCalendarModule } from "./modules/calendar/index.js";
+import { backupStorageToRemote } from "./core/storage-sync.js";
 import { registerAuthModule } from "./modules/auth/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -85,6 +86,16 @@ async function bootstrap() {
 
   const shutdown = async (signal: string) => {
     app.log.info({ signal }, "encerrando servidor...");
+
+    // último backup antes de morrer — é a chance de não perder o que mudou
+    // desde o backup periódico anterior (até 2min de intervalo). Timeout de
+    // segurança pra não travar o shutdown pra sempre se o Postgres estiver
+    // fora do ar nesse momento.
+    await Promise.race([
+      backupStorageToRemote(),
+      new Promise((resolve) => setTimeout(resolve, 8_000)),
+    ]).catch((err) => app.log.error({ err }, "falha no backup final de storage/ no shutdown"));
+
     await app.close();
     process.exit(0);
   };

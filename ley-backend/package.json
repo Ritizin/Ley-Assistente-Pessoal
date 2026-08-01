@@ -7,10 +7,10 @@
     "node": ">=20.0.0 <26.0.0"
   },
   "scripts": {
-    "dev": "tsx watch --clear-screen=false src/server.ts",
+    "dev": "tsx watch --clear-screen=false src/bootstrap.ts",
     "build": "tsc -p tsconfig.json",
     "render-build": "bash scripts/render-build.sh",
-    "start": "node --max-old-space-size=256 dist/server.js",
+    "start": "node --max-old-space-size=256 dist/bootstrap.js",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
