@@ -1,4 +1,4 @@
-import { MessageSquare, ListChecks, Circle, MessageCircle, Bell, Plug } from 'lucide-react'
+import { MessageSquare, ListChecks, Circle, MessageCircle, Bell, Plug, LogOut } from 'lucide-react'
 import LeyAvatar from './LeyAvatar'
 
 export type TabId = 'chat' | 'tasks' | 'whatsapp' | 'connections' | 'notifications'
@@ -10,6 +10,11 @@ interface SidebarProps {
   // quantidade de avisos não lidos (mensagens novas no WhatsApp) — mostrado
   // como uma bolinha no item "Notificações" do menu
   notificationCount?: number
+  // nome/e-mail de quem tá logado + ação de sair — antes ficava um selo
+  // fixo no canto superior direito por cima do conteúdo; agora mora aqui
+  // embaixo, junto do resto do rodapé do menu.
+  userLabel?: string | null
+  onLogout?: () => void
 }
 
 const NAV_ITEMS: { id: TabId; label: string; icon: typeof MessageSquare }[] = [
@@ -20,7 +25,14 @@ const NAV_ITEMS: { id: TabId; label: string; icon: typeof MessageSquare }[] = [
   { id: 'tasks', label: 'Tarefas', icon: ListChecks },
 ]
 
-export default function Sidebar({ active, onChange, wsConnected, notificationCount = 0 }: SidebarProps) {
+export default function Sidebar({
+  active,
+  onChange,
+  wsConnected,
+  notificationCount = 0,
+  userLabel,
+  onLogout,
+}: SidebarProps) {
   return (
     <>
       {/* ===== Desktop: menu lateral completo (>= md) ===== */}
@@ -63,6 +75,20 @@ export default function Sidebar({ active, onChange, wsConnected, notificationCou
             })}
           </nav>
         </div>
+
+        {userLabel && (
+          <div className="mb-2 flex items-center gap-2 rounded-lg border border-white/5 bg-midnight-800/60 px-3 py-2.5 text-xs">
+            <span className="flex-1 truncate text-slate-400">{userLabel}</span>
+            <button
+              onClick={onLogout}
+              title="Sair"
+              className="flex items-center gap-1 rounded-md px-1.5 py-1 text-slate-500 transition hover:bg-white/5 hover:text-rose-400"
+            >
+              <LogOut size={13} />
+              Sair
+            </button>
+          </div>
+        )}
 
         <div className="flex items-center gap-2 rounded-lg border border-white/5 bg-midnight-800/60 px-3 py-2.5 text-xs">
           <Circle

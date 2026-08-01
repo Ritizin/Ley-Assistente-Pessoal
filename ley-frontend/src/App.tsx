@@ -157,9 +157,22 @@ export default function App() {
     window.location.href = `${API_BASE_URL}/auth/google`
   }
 
+  const handleLogout = () => {
+    localStorage.removeItem('ley_auth_token')
+    localStorage.removeItem('ley_auth_user')
+    setAuthUser(null)
+  }
+
   return (
     <div className="flex h-screen w-full flex-col overflow-hidden bg-midnight-950 text-slate-100 md:flex-row">
-      <Sidebar active={activeTab} onChange={setActiveTab} wsConnected={connected} notificationCount={notificationCount} />
+      <Sidebar
+        active={activeTab}
+        onChange={setActiveTab}
+        wsConnected={connected}
+        notificationCount={notificationCount}
+        userLabel={authUser ? authUser.name ?? authUser.email : null}
+        onLogout={handleLogout}
+      />
 
       <main className="relative flex-1 overflow-hidden pb-14 md:pb-0">
         {!authUser ? (
@@ -206,11 +219,6 @@ export default function App() {
             )}
             {activeTab === 'tasks' && <TasksTab />}
           </>
-        )}
-        {authUser && (
-          <div className="absolute right-2 top-2 max-w-[45vw] truncate rounded-full border border-slate-800 bg-slate-900/80 px-2.5 py-1.5 text-[11px] text-slate-300 md:right-4 md:top-4 md:max-w-none md:px-3 md:py-2 md:text-xs">
-            {authUser.name ?? authUser.email}
-          </div>
         )}
       </main>
     </div>

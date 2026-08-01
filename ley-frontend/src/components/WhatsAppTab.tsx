@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useRef } from 'react'
+import { useCallback, useEffect, useState, useRef, useMemo } from 'react'
 import { API_BASE_URL } from '../config/api'
 import {
   Loader2,
@@ -92,6 +92,15 @@ export default function WhatsAppTab({ onWhatsAppEvent, focusJid, focusName, onFo
     } finally {
       setOpenedLoading(false)
     }
+
+    // marca tudo dessa conversa como lido — some o selo na lista sem
+    // precisar esperar um evento do WS de volta
+    fetch(`${API_BASE}/api/whatsapp/messages/seen-by-jid`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jid }),
+    }).catch(() => {})
+    setMessages((prev) => prev.map((m) => (m.jid === jid ? { ...m, seen: 1 } : m)))
   }, [])
 
   const closeConversation = useCallback(() => {
@@ -100,6 +109,38 @@ export default function WhatsAppTab({ onWhatsAppEvent, focusJid, focusName, onFo
     setOpenedMessages([])
     setSendFileError(null)
   }, [])
+
+  // agrupa o feed de mensagens recentes por conversa (jid) — antes a view
+  // "messages" listava tudo junto (todo mundo misturado, ordem só por
+  // horário), o que ficava confuso com várias conversas ativas. Agora só a
+  // última mensagem de cada contato/grupo aparece, tipo lista de conversas
+  // de verdade (estilo WhatsApp), ordenada pela mais recente primeiro.
+  const conversations = useMemo(() => {
+    const contactNameByJid = new Map(contacts.map((c) => [c.jid, c.name]))
+    const map = new Map<string, { jid: string; name: string | null; isGroup: boolean; last: WaMessage; unread: number }>()
+
+    for (const m of messages) {
+      const isUnread = !m.from_me && !m.seen
+      const existing = map.get(m.jid)
+
+      if (!existing) {
+        map.set(m.jid, {
+          jid: m.jid,
+          name: contactNameByJid.get(m.jid) ?? (!m.from_me ? m.sender_name : null),
+          isGroup: m.jid.endsWith('@g.us'),
+          last: m,
+          unread: isUnread ? 1 : 0,
+        })
+        continue
+      }
+
+      if (isUnread) existing.unread += 1
+      if (!existing.name && !m.from_me && m.sender_name && !existing.isGroup) existing.name = m.sender_name
+      if (m.created_at > existing.last.created_at) existing.last = m
+    }
+
+    return Array.from(map.values()).sort((a, b) => b.last.created_at - a.last.created_at)
+  }, [messages, contacts])
 
   // quando o Ley pede pra abrir uma conversa/grupo (evento vindo do App), abre
   // direto na tela e avisa o App que já foi tratado
@@ -197,8 +238,8 @@ export default function WhatsAppTab({ onWhatsAppEvent, focusJid, focusName, onFo
   }, [])
 
   useEffect(() => {
-    if (status === 'connected' && view === 'contacts') loadContacts()
-  }, [status, view, loadContacts])
+    if (status === 'connected') loadContacts()
+  }, [status, loadContacts])
 
   // busca o status atual assim que a aba monta — o snapshot do WS só chega
   // UMA VEZ quando o socket abre (que pode ter sido antes dessa aba existir),
@@ -446,42 +487,54 @@ export default function WhatsAppTab({ onWhatsAppEvent, focusJid, focusName, onFo
       )}
 
       {status === 'connected' && view === 'messages' && (
-        <div className="flex-1 overflow-y-auto px-6 py-6">
-          {messages.length === 0 ? (
-            <p className="text-center text-sm text-slate-500">Nenhuma mensagem ainda.</p>
+        <div className="flex-1 overflow-y-auto px-4 py-4">
+          {conversations.length === 0 ? (
+            <p className="pt-10 text-center text-sm text-slate-500">Nenhuma mensagem ainda.</p>
           ) : (
-            <div className="mx-auto flex max-w-2xl flex-col gap-3">
-              {messages.map((m) => {
-                const isUnread = !m.from_me && !m.seen
+            <div className="mx-auto flex max-w-2xl flex-col gap-1">
+              {conversations.map((c) => {
+                const displayName = c.name ?? `+${c.jid.split('@')[0]}`
+                const preview =
+                  c.last.type === 'audio'
+                    ? `🎤 ${c.last.transcript ? c.last.transcript.slice(0, 60) : 'Mensagem de voz'}`
+                    : c.last.type === 'text'
+                    ? c.last.text ?? ''
+                    : '📎 Anexo'
+
                 return (
-                  <div
-                    key={m.id}
-                    onClick={() => isUnread && markSeen(m.id)}
-                    className={`rounded-xl px-4 py-3 text-sm ring-1 transition ${
-                      m.from_me
-                        ? 'ml-auto max-w-[75%] bg-electric-500/10 text-slate-100 ring-electric-500/20'
-                        : `max-w-[75%] bg-midnight-800 text-slate-200 ring-white/5 ${
-                            isUnread ? 'cursor-pointer ring-2 ring-electric-500/50' : ''
-                          }`
-                    }`}
+                  <button
+                    key={c.jid}
+                    onClick={() => loadConversation(c.jid, c.name)}
+                    className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-white/5"
                   >
-                    {!m.from_me && (
-                      <p className="mb-1 flex items-center gap-2 text-xs font-medium text-electric-400">
-                        {m.sender_name ?? m.jid.split('@')[0]}
-                        {isUnread && (
-                          <span className="rounded bg-electric-500/20 px-1.5 py-0.5 text-[10px] text-electric-300">
-                            nova
+                    <div
+                      className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${
+                        c.isGroup ? 'bg-slate-700/40 text-slate-300' : 'bg-electric-500/15 text-electric-400'
+                      }`}
+                    >
+                      {c.isGroup ? <Users size={18} /> : <MessageSquareText size={18} />}
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="truncate text-sm font-medium text-slate-100">{displayName}</p>
+                        <p className="shrink-0 text-[10px] text-slate-500">
+                          {new Date(c.last.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="truncate text-xs text-slate-500">
+                          {c.last.from_me && <span className="text-slate-600">Você: </span>}
+                          {preview}
+                        </p>
+                        {c.unread > 0 && (
+                          <span className="flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-electric-500 px-1.5 text-[10px] font-semibold text-white">
+                            {c.unread}
                           </span>
                         )}
-                      </p>
-                    )}
-
-                    {renderMessageBody(m)}
-
-                    <p className="mt-1 text-[10px] text-slate-500">
-                      {new Date(m.created_at).toLocaleString('pt-BR')}
-                    </p>
-                  </div>
+                      </div>
+                    </div>
+                  </button>
                 )
               })}
             </div>
