@@ -27,7 +27,28 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // SEM ISSO, qualquer erro não tratado em background (WhatsApp, Gmail, WS,
 // timers) derruba o processo Node inteiro sem log nenhum — é exatamente
 // o "o servidor parou do nada" que você viu. Loga e segue rodando.
+//
+// Um caso específico é esperado e inofensivo: durante uma reconexão do
+// Baileys (ex: logo depois de um "conflict/replaced", quando duas conexões
+// se sobrepõem por um instante num redeploy), a própria lib deixa escapar
+// uma promise rejeitada internamente com Boom 428 "Connection Closed" — o
+// socket.service.ts já tem retry automático (scheduleReconnect) cuidando
+// disso, então isso NÃO é uma falha real. Sem essa distinção, aparecia como
+// "error" no log toda vez que o servidor reiniciava, parecendo um bug.
+// Continua aparecendo (pra não esconder de verdade), só que como aviso.
+function isBenignBaileysReconnectRejection(reason: unknown): boolean {
+  const boom = reason as { output?: { statusCode?: number; payload?: { message?: string } } } | null;
+  return boom?.output?.statusCode === 428 && boom.output?.payload?.message === "Connection Closed";
+}
+
 process.on("unhandledRejection", (reason) => {
+  if (isBenignBaileysReconnectRejection(reason)) {
+    logger.warn(
+      { reason },
+      "reconexão do WhatsApp em andamento (socket anterior fechado) — sem ação necessária, o retry automático cuida disso"
+    );
+    return;
+  }
   logger.error({ reason }, "Promise rejeitada sem tratamento — servidor segue rodando");
 });
 process.on("uncaughtException", (err) => {

@@ -5,13 +5,25 @@ import { env } from "../config/env.js";
 import { logger } from "./logger.js";
 
 // O que rastreamos: o SQLite compartilhado (storage/ley.db — WhatsApp
-// contatos/mensagens, Gmail, Instagram, Spotify, Google Home, Tarefas) e a
+// contatos/mensagens, Gmail, Instagram, Spotify, Google Home, Tarefas), a
 // sessão do WhatsApp (storage/whatsapp-session/, vários arquivos pequenos do
-// Baileys). O storage/auth.db NÃO entra aqui de propósito: quando
-// DATABASE_URL está setada, auth.db.ts já migra sozinho pra Postgres (tem
-// adapter dual desde sempre) — não precisa de backup/restore de arquivo.
+// Baileys) e a mídia do WhatsApp (storage/whatsapp-media/ — fotos/vídeos de
+// Status recebidos e áudios enviados). O storage/auth.db NÃO entra aqui de
+// propósito: quando DATABASE_URL está setada, auth.db.ts já migra sozinho
+// pra Postgres (tem adapter dual desde sempre) — não precisa de
+// backup/restore de arquivo.
+//
+// BUG corrigido aqui: storage/whatsapp-media/ não entrava nessa lista. O
+// ley.db (com a linha do status em wa_statuses) era restaurado certinho a
+// cada boot/hibernação do Render, mas o arquivo de mídia que aquela linha
+// aponta (media_path) nunca tinha sido salvo no Postgres — sumia do disco
+// no primeiro reciclo do container. Resultado: o status aparecia na tirinha
+// e abria o visualizador, mas a foto/vídeo vinha 404 (o painel mostrava só
+// o alt="Status" no lugar da imagem quebrada).
 const TRACKED_DB_FILE = "storage/ley.db";
 const TRACKED_SESSION_DIR = "storage/whatsapp-session";
+const TRACKED_MEDIA_DIR = "storage/whatsapp-media";
+const TRACKED_DIRS = [TRACKED_SESSION_DIR, TRACKED_MEDIA_DIR];
 
 let pool: Pool | null = null;
 
@@ -48,11 +60,12 @@ function listFilesRecursive(dir: string): string[] {
 }
 
 /**
- * Restaura storage/ley.db e storage/whatsapp-session/ do Postgres pro disco
- * local. PRECISA rodar antes de qualquer outro módulo do app (é por isso que
- * existe o bootstrap.ts — o llm/db.ts abre o ley.db assim que é importado,
- * então restaurar depois seria tarde demais). Sem DATABASE_URL, não faz nada
- * (comportamento local idêntico a antes dessa feature existir).
+ * Restaura storage/ley.db, storage/whatsapp-session/ e storage/whatsapp-media/
+ * do Postgres pro disco local. PRECISA rodar antes de qualquer outro módulo
+ * do app (é por isso que existe o bootstrap.ts — o llm/db.ts abre o ley.db
+ * assim que é importado, então restaurar depois seria tarde demais). Sem
+ * DATABASE_URL, não faz nada (comportamento local idêntico a antes dessa
+ * feature existir).
  */
 export async function restoreStorageFromRemote(): Promise<void> {
   const p = getPool();
@@ -82,7 +95,8 @@ export async function restoreStorageFromRemote(): Promise<void> {
 }
 
 /**
- * Sobe pro Postgres o estado atual de storage/ley.db e storage/whatsapp-session/.
+ * Sobe pro Postgres o estado atual de storage/ley.db, storage/whatsapp-session/
+ * e storage/whatsapp-media/.
  * Chamado periodicamente e no encerramento do processo (SIGTERM, que o
  * Render manda antes de derrubar o container num redeploy).
  */
@@ -103,15 +117,18 @@ export async function backupStorageToRemote(): Promise<void> {
   const dbFile = path.resolve(TRACKED_DB_FILE);
   const filesToBackup = [
     ...(fs.existsSync(dbFile) ? [dbFile] : []),
-    ...listFilesRecursive(path.resolve(TRACKED_SESSION_DIR)),
+    ...TRACKED_DIRS.flatMap((dir) => listFilesRecursive(path.resolve(dir))),
   ];
 
   if (filesToBackup.length === 0) return;
 
   try {
     await ensureTable(p);
+    const localRelPaths = new Set<string>();
+
     for (const absPath of filesToBackup) {
       const relPath = path.relative(process.cwd(), absPath);
+      localRelPaths.add(relPath);
       const data = fs.readFileSync(absPath);
       await p.query(
         `INSERT INTO storage_backups (path, data, updated_at) VALUES ($1, $2, $3)
@@ -119,6 +136,23 @@ export async function backupStorageToRemote(): Promise<void> {
         [relPath, data, Date.now()]
       );
     }
+
+    // sem isso, mídia apagada localmente (ex: foto de status vencido depois
+    // de 24h, ver cleanupExpiredStatuses) ficava órfã no Postgres pra
+    // sempre — o arquivo nunca mais existe local, mas o backup remoto
+    // continuava guardando (e restaurando) o blob antigo a cada boot,
+    // crescendo sem limite.
+    for (const dir of TRACKED_DIRS) {
+      const { rows } = await p.query<{ path: string }>(
+        "SELECT path FROM storage_backups WHERE path LIKE $1",
+        [`${dir}%`]
+      );
+      const toDelete = rows.map((r) => r.path).filter((remotePath) => !localRelPaths.has(remotePath));
+      if (toDelete.length > 0) {
+        await p.query("DELETE FROM storage_backups WHERE path = ANY($1)", [toDelete]);
+      }
+    }
+
     logger.info({ files: filesToBackup.length }, "[storage-sync] backup de storage/ salvo no Postgres");
   } catch (err) {
     logger.error({ err }, "[storage-sync] falha ao salvar backup de storage/ no Postgres");
