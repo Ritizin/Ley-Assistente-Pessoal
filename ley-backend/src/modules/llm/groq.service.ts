@@ -162,6 +162,16 @@ function isRateLimitOrUnavailable(err: unknown): boolean {
     return true;
   }
 
+  // "context_length_exceeded" (400): o modelo ativo tem uma janela de
+  // contexto pequena demais pro histórico + mensagem atual (ex: allam-2-7b
+  // só tem 4k tokens no total, contando a resposta). Trocar de modelo aqui
+  // resolve de verdade — os modelos do FALLBACK_ORDER (gpt-oss-120b/20b,
+  // qwen3.6-27b) têm janelas bem maiores (128k+). Sem isso, o erro cru da
+  // Groq vazava direto pro chat (era o que você viu na tela).
+  if (msg.includes("context_length_exceeded") || msg.includes("reduce the length of the messages")) {
+    return true;
+  }
+
   return false;
 }
 

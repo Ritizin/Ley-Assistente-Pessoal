@@ -45,6 +45,23 @@ export function saveActiveProjectId(id: string | null) {
   else localStorage.removeItem(ACTIVE_KEY)
 }
 
+// Chaves de localStorage do histórico de chat de um projeto — cada projeto
+// tem sua própria conversa (conversationId + mensagens na tela), separada do
+// chat geral. Exportado aqui pra ChatTab.tsx e App.tsx usarem exatamente a
+// mesma convenção de nome, sem duplicar a string em dois lugares.
+export function projectChatKeys(id: string): { convo: string; history: string } {
+  return { convo: `ley:conversationId:${id}`, history: `ley:chatHistory:${id}` }
+}
+
+// chamado ao excluir um projeto: apaga o histórico de chat dele do
+// localStorage (o conversationId/mensagens no backend continuam existindo,
+// só não aparecem mais em lugar nenhum do painel)
+export function clearProjectChatStorage(id: string): void {
+  const { convo, history } = projectChatKeys(id)
+  localStorage.removeItem(convo)
+  localStorage.removeItem(history)
+}
+
 // Junta arquivos recém-gerados num projeto existente: mesmo "path" sobrescreve
 // (marcado como 'updated'), path novo entra como 'created'.
 export function mergeFilesIntoProject(project: Project, incoming: { path: string; content: string }[]): Project {

@@ -24,6 +24,7 @@ import {
   loadActiveProjectId,
   saveActiveProjectId,
   mergeFilesIntoProject,
+  clearProjectChatStorage,
 } from './types/projects'
 
 interface AuthUser {
@@ -76,10 +77,26 @@ export default function App() {
     const project = projects.find((p) => p.id === id)
     if (!project) return
     setActiveProjectId(id)
+    // abre o projeto como se fosse um chat próprio, com histórico separado
+    // do chat geral (ver ChatTab.tsx — a `key` diferente força remontar com
+    // o conversationId/mensagens certos)
+    setActiveTab('chat')
     if (project.files.length > 0) {
       setPanelFiles(project.files)
       setPanelGenId((g) => g + 1)
       setPanelOpen(true)
+    }
+  }
+
+  const handleRenameProject = (id: string, name: string) => {
+    setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, name, updatedAt: Date.now() } : p)))
+  }
+
+  const handleDeleteProject = (id: string) => {
+    setProjects((prev) => prev.filter((p) => p.id !== id))
+    clearProjectChatStorage(id)
+    if (activeProjectId === id) {
+      setActiveProjectId(null)
     }
   }
 
@@ -278,13 +295,24 @@ export default function App() {
           </div>
         ) : (
           <>
-            {activeTab === 'chat' && <ChatTab onChatEvent={onChatEvent} onFilesGenerated={handleFilesGenerated} />}
+            {activeTab === 'chat' && (
+              <ChatTab
+                key={activeProjectId ?? 'general'}
+                onChatEvent={onChatEvent}
+                onFilesGenerated={handleFilesGenerated}
+                projectId={activeProjectId}
+                projectName={activeProject?.name ?? null}
+                onExitProject={() => setActiveProjectId(null)}
+              />
+            )}
             {activeTab === 'projects' && (
               <ProjectsPanel
                 projects={projects}
                 activeProjectId={activeProjectId}
                 onCreate={handleCreateProject}
                 onOpen={handleOpenProject}
+                onRename={handleRenameProject}
+                onDelete={handleDeleteProject}
               />
             )}
             {activeTab === 'notifications' && (

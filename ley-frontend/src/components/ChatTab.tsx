@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { API_BASE_URL } from '../config/api'
-import { Mic, Send, User, Square, Trash2, Paperclip, Camera, X, ChevronDown, Cpu, FileText, Copy, Check } from 'lucide-react'
+import { Mic, Send, User, Square, Trash2, Paperclip, Camera, X, ChevronDown, Cpu, FileText, Copy, Check, FolderKanban } from 'lucide-react'
 import VoiceModal from './VoiceModal'
 import { MessageContent, parseMessageContent } from './GeneratedContent'
 import LeyAvatar from './LeyAvatar'
+import { projectChatKeys } from '../types/projects'
 
 interface ChatMessage {
   id: string
@@ -41,11 +42,21 @@ interface ChatTabProps {
   // arquivo (```linguagem path="..."), pro App.tsx decidir se entra no
   // projeto ativo e abrir o painel lateral
   onFilesGenerated?: (files: { path: string; content: string }[]) => void
+  // quando presente, esse ChatTab é a conversa de um projeto específico —
+  // usa um conversationId e um histórico próprios (localStorage separado),
+  // em vez do chat geral. O App.tsx troca a `key` do componente ao mudar de
+  // projeto, então cada montagem já nasce com o par certo de chaves.
+  projectId?: string | null
+  projectName?: string | null
+  onExitProject?: () => void
 }
 
-export default function ChatTab({ onChatEvent, onFilesGenerated }: ChatTabProps) {
+export default function ChatTab({ onChatEvent, onFilesGenerated, projectId, projectName, onExitProject }: ChatTabProps) {
+  const convoKey = projectId ? projectChatKeys(projectId).convo : STORAGE_KEY_CONVO
+  const historyKey = projectId ? projectChatKeys(projectId).history : STORAGE_KEY_HISTORY
+
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_HISTORY)
+    const saved = localStorage.getItem(historyKey)
     return saved ? JSON.parse(saved) : []
   })
   const [input, setInput] = useState('')
@@ -80,7 +91,7 @@ export default function ChatTab({ onChatEvent, onFilesGenerated }: ChatTabProps)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const cameraInputRef = useRef<HTMLInputElement>(null)
 
-  const conversationId = useRef<string | null>(localStorage.getItem(STORAGE_KEY_CONVO))
+  const conversationId = useRef<string | null>(localStorage.getItem(convoKey))
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -116,8 +127,8 @@ export default function ChatTab({ onChatEvent, onFilesGenerated }: ChatTabProps)
   }, [messages, isTyping])
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(messages))
-  }, [messages])
+    localStorage.setItem(historyKey, JSON.stringify(messages))
+  }, [messages, historyKey])
 
   // Aviso que o backend manda sozinho (whatsapp-notify.ts), sem o usuário ter
   // mandado nada — ex: "fulano te mandou mensagem no zap". Só entra na lista
@@ -171,7 +182,7 @@ export default function ChatTab({ onChatEvent, onFilesGenerated }: ChatTabProps)
 
       if (data.conversationId) {
         conversationId.current = data.conversationId
-        localStorage.setItem(STORAGE_KEY_CONVO, data.conversationId)
+        localStorage.setItem(convoKey, data.conversationId)
       }
 
       const replyText = data.reply ?? '(sem resposta)'
@@ -214,7 +225,7 @@ export default function ChatTab({ onChatEvent, onFilesGenerated }: ChatTabProps)
     } finally {
       setIsTyping(false)
     }
-  }, [])
+  }, [convoKey])
 
   const startRecording = useCallback(async () => {
     try {
@@ -315,7 +326,7 @@ export default function ChatTab({ onChatEvent, onFilesGenerated }: ChatTabProps)
 
       if (data.conversationId) {
         conversationId.current = data.conversationId
-        localStorage.setItem(STORAGE_KEY_CONVO, data.conversationId)
+        localStorage.setItem(convoKey, data.conversationId)
       }
 
       setMessages((prev) => [
@@ -333,7 +344,7 @@ export default function ChatTab({ onChatEvent, onFilesGenerated }: ChatTabProps)
       setIsTyping(false)
       setUploading(false)
     }
-  }, [])
+  }, [convoKey])
 
   // Limpa só o que aparece na tela. NÃO mexe no conversationId nem em nada no
   // backend — o histórico real (o que a Ley usa como contexto) continua
@@ -344,8 +355,8 @@ export default function ChatTab({ onChatEvent, onFilesGenerated }: ChatTabProps)
       return
     }
     setMessages([])
-    localStorage.removeItem(STORAGE_KEY_HISTORY)
-  }, [])
+    localStorage.removeItem(historyKey)
+  }, [historyKey])
 
   function sendMessageFromInput() {
     if (isTyping || uploading) return
@@ -374,10 +385,36 @@ export default function ChatTab({ onChatEvent, onFilesGenerated }: ChatTabProps)
     <div className="flex h-full flex-col">
       <header className="flex items-center justify-between border-b border-white/5 px-6 py-4">
         <div>
-          <h1 className="font-display text-xl font-semibold text-white">Chat</h1>
+          {projectId ? (
+            <div className="mb-1.5 flex items-center gap-2">
+              <span className="flex items-center gap-1.5 rounded-full bg-electric-500/15 px-2.5 py-1 text-[11px] font-medium text-electric-400">
+                <FolderKanban size={12} />
+                {projectName ?? 'Projeto'}
+              </span>
+              {onExitProject && (
+                <button
+                  onClick={onExitProject}
+                  title="Sair do projeto e voltar pro chat geral"
+                  className="flex items-center gap-1 rounded-full px-2 py-1 text-[11px] text-slate-500 hover:bg-white/5 hover:text-slate-300 cursor-pointer"
+                >
+                  <X size={12} />
+                  Sair do projeto
+                </button>
+              )}
+            </div>
+          ) : null}
+          <h1 className="font-display text-xl font-semibold text-white">
+            {projectId ? projectName ?? 'Chat do projeto' : 'Chat'}
+          </h1>
           <p className="text-sm text-slate-400">
-            Converse com a Ley em tempo real · use <span className="text-electric-400">/criar</span> ou{' '}
-            <span className="text-electric-400">/gerar</span> pra pedir um arquivo pra baixar
+            {projectId
+              ? 'Esse chat é só desse projeto — o histórico fica separado do chat geral.'
+              : (
+                <>
+                  Converse com a Ley em tempo real · use <span className="text-electric-400">/criar</span> ou{' '}
+                  <span className="text-electric-400">/gerar</span> pra pedir um arquivo pra baixar
+                </>
+              )}
           </p>
         </div>
         <div className="flex items-center gap-2">

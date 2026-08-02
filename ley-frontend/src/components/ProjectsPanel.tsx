@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, FolderKanban, FileCode, X } from 'lucide-react'
+import { Plus, FolderKanban, FileCode, X, Pencil, Trash2 } from 'lucide-react'
 import type { Project } from '../types/projects'
 
 interface ProjectsPanelProps {
@@ -7,6 +7,8 @@ interface ProjectsPanelProps {
   activeProjectId: string | null
   onCreate: (name: string) => void
   onOpen: (id: string) => void
+  onRename: (id: string, name: string) => void
+  onDelete: (id: string) => void
 }
 
 function formatRelativeDate(ms: number): string {
@@ -21,13 +23,28 @@ function formatRelativeDate(ms: number): string {
   return new Date(ms).toLocaleDateString('pt-BR')
 }
 
-function NewProjectModal({ onClose, onCreate }: { onClose: () => void; onCreate: (name: string) => void }) {
-  const [name, setName] = useState('')
+// Modal de nome, reaproveitado tanto pra criar um projeto novo quanto pra
+// renomear um existente — só muda o título/label/texto do botão e se já
+// chega com um `initialName` preenchido.
+function ProjectNameModal({
+  title,
+  submitLabel,
+  initialName = '',
+  onClose,
+  onSubmit,
+}: {
+  title: string
+  submitLabel: string
+  initialName?: string
+  onClose: () => void
+  onSubmit: (name: string) => void
+}) {
+  const [name, setName] = useState(initialName)
 
   function handleSubmit() {
     const trimmed = name.trim()
     if (!trimmed) return
-    onCreate(trimmed)
+    onSubmit(trimmed)
     onClose()
   }
 
@@ -35,7 +52,7 @@ function NewProjectModal({ onClose, onCreate }: { onClose: () => void; onCreate:
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm px-4">
       <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-midnight-900/90 p-5 shadow-2xl backdrop-blur-xl">
         <div className="mb-4 flex items-center justify-between">
-          <p className="text-sm font-semibold text-slate-100">Novo projeto</p>
+          <p className="text-sm font-semibold text-slate-100">{title}</p>
           <button onClick={onClose} className="text-slate-500 hover:text-slate-300 cursor-pointer">
             <X size={16} />
           </button>
@@ -46,6 +63,7 @@ function NewProjectModal({ onClose, onCreate }: { onClose: () => void; onCreate:
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
+          onFocus={(e) => e.target.select()}
           placeholder="Ex: Portfólio Ritizin"
           className="w-full rounded-lg border border-white/10 bg-midnight-950/60 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-600 outline-none focus:border-electric-500/50 focus:ring-1 focus:ring-electric-500/30"
         />
@@ -61,7 +79,7 @@ function NewProjectModal({ onClose, onCreate }: { onClose: () => void; onCreate:
             disabled={!name.trim()}
             className="flex-1 rounded-lg bg-electric-500 px-3 py-2 text-xs font-medium text-white hover:bg-electric-600 disabled:opacity-40 cursor-pointer"
           >
-            Criar
+            {submitLabel}
           </button>
         </div>
       </div>
@@ -69,9 +87,57 @@ function NewProjectModal({ onClose, onCreate }: { onClose: () => void; onCreate:
   )
 }
 
-export default function ProjectsPanel({ projects, activeProjectId, onCreate, onOpen }: ProjectsPanelProps) {
+function DeleteProjectModal({
+  projectName,
+  onClose,
+  onConfirm,
+}: {
+  projectName: string
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm px-4">
+      <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-midnight-900/90 p-5 shadow-2xl backdrop-blur-xl">
+        <div className="mb-3 flex items-center justify-between">
+          <p className="text-sm font-semibold text-slate-100">Excluir projeto</p>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-300 cursor-pointer">
+            <X size={16} />
+          </button>
+        </div>
+        <p className="text-xs leading-5 text-slate-400">
+          Tem certeza que quer excluir <span className="font-medium text-slate-200">{projectName}</span>? Os
+          arquivos e o histórico de chat desse projeto somem do painel e essa ação não pode ser desfeita.
+        </p>
+        <div className="mt-4 flex gap-2">
+          <button
+            onClick={onClose}
+            className="flex-1 rounded-lg border border-white/10 px-3 py-2 text-xs font-medium text-slate-300 hover:bg-white/5 cursor-pointer"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={() => {
+              onConfirm()
+              onClose()
+            }}
+            className="flex-1 rounded-lg bg-red-500/90 px-3 py-2 text-xs font-medium text-white hover:bg-red-500 cursor-pointer"
+          >
+            Excluir
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default function ProjectsPanel({ projects, activeProjectId, onCreate, onOpen, onRename, onDelete }: ProjectsPanelProps) {
   const [modalOpen, setModalOpen] = useState(false)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const sorted = [...projects].sort((a, b) => b.updatedAt - a.updatedAt)
+  const renamingProject = sorted.find((p) => p.id === renamingId) ?? null
+  const deletingProject = sorted.find((p) => p.id === deletingId) ?? null
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-midnight-950">
@@ -101,16 +167,42 @@ export default function ProjectsPanel({ projects, activeProjectId, onCreate, onO
         ) : (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {sorted.map((p) => (
-              <button
+              <div
                 key={p.id}
+                role="button"
+                tabIndex={0}
                 onClick={() => onOpen(p.id)}
-                className={`flex flex-col gap-2.5 rounded-xl border px-4 py-3.5 text-left transition cursor-pointer ${
+                onKeyDown={(e) => e.key === 'Enter' && onOpen(p.id)}
+                className={`group relative flex flex-col gap-2.5 rounded-xl border px-4 py-3.5 text-left transition cursor-pointer ${
                   p.id === activeProjectId
                     ? 'border-electric-500/40 bg-electric-500/5 shadow-glow-sm'
                     : 'border-white/10 bg-midnight-900/60 hover:bg-white/5'
                 }`}
               >
-                <div className="flex items-center gap-2">
+                <div className="absolute right-2.5 top-2.5 flex items-center gap-1 opacity-0 transition group-hover:opacity-100">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setRenamingId(p.id)
+                    }}
+                    title="Renomear projeto"
+                    className="rounded-md p-1.5 text-slate-500 hover:bg-white/10 hover:text-slate-200 cursor-pointer"
+                  >
+                    <Pencil size={13} />
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setDeletingId(p.id)
+                    }}
+                    title="Excluir projeto"
+                    className="rounded-md p-1.5 text-slate-500 hover:bg-red-500/15 hover:text-red-400 cursor-pointer"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-2 pr-12">
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-electric-500/15 text-electric-400">
                     <FileCode size={15} />
                   </div>
@@ -125,13 +217,38 @@ export default function ProjectsPanel({ projects, activeProjectId, onCreate, onO
                     Ativo
                   </span>
                 )}
-              </button>
+              </div>
             ))}
           </div>
         )}
       </div>
 
-      {modalOpen && <NewProjectModal onClose={() => setModalOpen(false)} onCreate={onCreate} />}
+      {modalOpen && (
+        <ProjectNameModal
+          title="Novo projeto"
+          submitLabel="Criar"
+          onClose={() => setModalOpen(false)}
+          onSubmit={onCreate}
+        />
+      )}
+
+      {renamingProject && (
+        <ProjectNameModal
+          title="Renomear projeto"
+          submitLabel="Salvar"
+          initialName={renamingProject.name}
+          onClose={() => setRenamingId(null)}
+          onSubmit={(name) => onRename(renamingProject.id, name)}
+        />
+      )}
+
+      {deletingProject && (
+        <DeleteProjectModal
+          projectName={deletingProject.name}
+          onClose={() => setDeletingId(null)}
+          onConfirm={() => onDelete(deletingProject.id)}
+        />
+      )}
     </div>
   )
 }
