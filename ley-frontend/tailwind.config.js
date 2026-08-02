@@ -43,10 +43,15 @@ export default {
           '0%, 100%': { opacity: 1 },
           '50%': { opacity: 0 },
         },
+        statusProgress: {
+          from: { width: '0%' },
+          to: { width: '100%' },
+        },
       },
       animation: {
         pulseDot: 'pulseDot 1.4s ease-in-out infinite',
         blink: 'blink 1s step-start infinite',
+        statusProgress: 'statusProgress 5s linear forwards',
       },
     },
   },

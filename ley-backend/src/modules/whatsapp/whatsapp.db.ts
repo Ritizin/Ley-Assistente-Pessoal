@@ -62,6 +62,12 @@ if (!contactCols.some((c) => c.name === "audio_opt_out")) {
   db.exec(`ALTER TABLE wa_contacts ADD COLUMN audio_opt_out INTEGER NOT NULL DEFAULT 0`);
 }
 
+// migração leve: fixar conversa/grupo no topo da lista (menu de "Fixar
+// conversa" no WhatsAppTab). 0 = normal, 1 = fixado.
+if (!contactCols.some((c) => c.name === "pinned")) {
+  db.exec(`ALTER TABLE wa_contacts ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`);
+}
+
 // tabela genérica key/value pro módulo de WhatsApp — hoje só guarda o toggle
 // global do autopilot ("autopilot_global": "1" | "0"), mas fica pronta pra
 // outras configs futuras sem precisar de migração nova
@@ -70,4 +76,29 @@ db.exec(`
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+`);
+
+// Status/Stories do WhatsApp (as postagens de 24h que aparecem em
+// "status@broadcast"). Cada linha é UMA atualização de status de UM
+// contato. "seen" é local ao painel da Ley (não sincroniza com o app
+// oficial) — só controla o anel de "já vi" na tirinha de status.
+// "expires_at" é sempre created_at + 24h; a limpeza (linha + arquivo de
+// mídia) roda periodicamente em whatsapp.service.ts.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS wa_statuses (
+    id TEXT PRIMARY KEY,
+    jid TEXT NOT NULL,
+    sender_name TEXT,
+    type TEXT NOT NULL DEFAULT 'text' CHECK (type IN ('image', 'video', 'text')),
+    text TEXT,
+    bg_color TEXT,
+    media_path TEXT,
+    media_mimetype TEXT,
+    seen INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_wa_statuses_jid ON wa_statuses(jid, created_at);
+  CREATE INDEX IF NOT EXISTS idx_wa_statuses_expires ON wa_statuses(expires_at);
 `);

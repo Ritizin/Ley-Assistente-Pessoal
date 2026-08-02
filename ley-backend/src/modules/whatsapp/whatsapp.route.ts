@@ -3,8 +3,11 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   getContactAutopilot,
+  getContactByJid,
   getMessageById,
+  getStatusById,
   getWaSetting,
+  listActiveStatuses,
   listContacts,
   listMessagesByJid,
   listRecentMessages,
@@ -12,6 +15,7 @@ import {
   markAllSeen,
   markSeenByJid,
   markMessageSeen,
+  markStatusSeen,
   setContactAutopilot,
   setWaSetting,
 } from "./whatsapp.repository.js";
@@ -31,6 +35,10 @@ const blockBodySchema = z
   .refine((data) => data.jid || data.contact, { message: "informe jid ou contact" });
 
 const autopilotGlobalBodySchema = z.object({ enabled: z.boolean() });
+
+const chatJidBodySchema = z.object({ jid: z.string().min(1) });
+
+const statusReplyBodySchema = z.object({ text: z.string().min(1) });
 
 const autopilotContactBodySchema = z
   .object({
@@ -137,6 +145,94 @@ export async function whatsappRoutes(app: FastifyInstance): Promise<void> {
 
     reply.header("Content-Length", stat.size);
     return reply.send(fs.createReadStream(message.media_path));
+  });
+
+  // lista os status ainda dentro da janela de 24h, agrupados por quem
+  // postou — é o formato que a tirinha de Status do painel consome direto
+  // (um círculo por contato, com os itens em ordem cronológica dentro dele)
+  app.get("/api/whatsapp/statuses", async () => {
+    const statuses = listActiveStatuses();
+    const groups = new Map<string, { jid: string; name: string | null; items: typeof statuses }>();
+
+    for (const s of statuses) {
+      const existing = groups.get(s.jid);
+      if (existing) {
+        existing.items.push(s);
+        continue;
+      }
+      groups.set(s.jid, {
+        jid: s.jid,
+        name: getContactByJid(s.jid)?.name ?? s.sender_name ?? null,
+        items: [s],
+      });
+    }
+
+    // grupos com pelo menos um item não visto vêm primeiro; dentro de cada
+    // grupo os itens já chegam mais recentes -> mais antigos (ordem da
+    // query), então inverte pra exibir na ordem em que foram postados
+    return Array.from(groups.values())
+      .map((g) => ({ ...g, items: g.items.slice().reverse(), hasUnseen: g.items.some((i) => !i.seen) }))
+      .sort((a, b) => Number(b.hasUnseen) - Number(a.hasUnseen));
+  });
+
+  // marca um status individual como visto (só local ao painel)
+  app.post("/api/whatsapp/statuses/:id/seen", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const ok = markStatusSeen(id);
+    if (!ok) return reply.code(404).send({ error: "status não encontrado" });
+    return { ok: true };
+  });
+
+  // responde a um status — vira mensagem direta pro dono, citando o status
+  // (igual o WhatsApp de verdade faz; nunca é público)
+  app.post("/api/whatsapp/statuses/:id/reply", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = statusReplyBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "payload inválido", details: parsed.error.flatten() });
+    }
+
+    try {
+      await whatsappService.replyToStatus(id, parsed.data.text);
+      return { ok: true };
+    } catch (err) {
+      req.log.error({ err, id }, "falha ao responder status");
+      return reply.code(502).send({ error: err instanceof Error ? err.message : "falha ao responder status" });
+    }
+  });
+
+  // serve a mídia (foto/vídeo) de um status — mesmo esquema de Range
+  // request do /media/:id, senão vídeo de status também fica preso em
+  // "0:00 / 0:00"
+  app.get("/api/whatsapp/status-media/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const statusRow = getStatusById(id);
+
+    if (!statusRow?.media_path || !fs.existsSync(statusRow.media_path)) {
+      return reply.code(404).send({ error: "mídia não encontrada" });
+    }
+
+    const stat = fs.statSync(statusRow.media_path);
+    const mime = statusRow.media_mimetype ?? "image/jpeg";
+    const range = req.headers.range;
+
+    reply.header("Content-Type", mime);
+    reply.header("Accept-Ranges", "bytes");
+
+    if (range) {
+      const match = /bytes=(\d*)-(\d*)/.exec(range);
+      const start = match?.[1] ? parseInt(match[1], 10) : 0;
+      const end = match?.[2] ? parseInt(match[2], 10) : stat.size - 1;
+      const chunkSize = end - start + 1;
+
+      reply.code(206);
+      reply.header("Content-Range", `bytes ${start}-${end}/${stat.size}`);
+      reply.header("Content-Length", chunkSize);
+      return reply.send(fs.createReadStream(statusRow.media_path, { start, end }));
+    }
+
+    reply.header("Content-Length", stat.size);
+    return reply.send(fs.createReadStream(statusRow.media_path));
   });
 
   // envio manual de texto pelo painel (fora do fluxo de chat da Ley)
@@ -281,6 +377,54 @@ export async function whatsappRoutes(app: FastifyInstance): Promise<void> {
     } catch (err) {
       req.log.error({ err }, "falha ao bloquear/desbloquear contato no WhatsApp");
       return reply.code(502).send({ error: "falha ao bloquear/desbloquear contato" });
+    }
+  });
+
+  // fixa/desafixa uma conversa ou grupo (some no topo da lista)
+  app.post("/api/whatsapp/chat/pin", async (req, reply) => {
+    const parsed = chatJidBodySchema.extend({ pinned: z.boolean() }).safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "payload inválido", details: parsed.error.flatten() });
+    }
+
+    try {
+      await whatsappService.pinChat(parsed.data.jid, parsed.data.pinned);
+      return { ok: true, jid: parsed.data.jid, pinned: parsed.data.pinned };
+    } catch (err) {
+      req.log.error({ err }, "falha ao fixar/desafixar conversa");
+      return reply.code(502).send({ error: "falha ao fixar/desafixar conversa" });
+    }
+  });
+
+  // apaga o histórico de uma conversa/grupo, mantendo o contato
+  app.post("/api/whatsapp/chat/clear", async (req, reply) => {
+    const parsed = chatJidBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "payload inválido", details: parsed.error.flatten() });
+    }
+
+    try {
+      await whatsappService.clearChat(parsed.data.jid);
+      return { ok: true, jid: parsed.data.jid };
+    } catch (err) {
+      req.log.error({ err }, "falha ao limpar conversa");
+      return reply.code(502).send({ error: "falha ao limpar conversa" });
+    }
+  });
+
+  // remove a conversa/grupo inteiro (contato + mensagens)
+  app.post("/api/whatsapp/chat/delete", async (req, reply) => {
+    const parsed = chatJidBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "payload inválido", details: parsed.error.flatten() });
+    }
+
+    try {
+      await whatsappService.deleteChat(parsed.data.jid);
+      return { ok: true, jid: parsed.data.jid };
+    } catch (err) {
+      req.log.error({ err }, "falha ao excluir conversa");
+      return reply.code(502).send({ error: "falha ao excluir conversa" });
     }
   });
 

@@ -23,7 +23,16 @@ import {
   saveMessage,
   upsertContact,
   upsertGroupContact,
+  setContactPinned,
+  clearMessagesByJid,
+  deleteContactAndMessages,
+  listMessagesByJid,
+  saveStatus,
+  deleteExpiredStatuses,
+  getStatusById,
   type WaContactRow,
+  type WaStatusType,
+  type WaStatusRow,
 } from "./whatsapp.repository.js";
 
 export type WhatsAppStatus = "disconnected" | "connecting" | "qr_pending" | "connected";
@@ -31,6 +40,13 @@ export type WhatsAppStatus = "disconnected" | "connecting" | "qr_pending" | "con
 const MAX_RECONNECT_DELAY_MS = 30_000;
 const BASE_RECONNECT_DELAY_MS = 2_000;
 const MEDIA_DIR = path.resolve("storage/whatsapp-media");
+// Status/Stories somem depois de 24h no WhatsApp de verdade — a gente segue
+// a mesma janela aqui pra decidir o que ainda mostrar na tirinha do painel.
+const STATUS_TTL_MS = 24 * 60 * 60 * 1000;
+// de quanto em quanto tempo varre wa_statuses procurando status vencido pra
+// apagar (linha + arquivo de mídia no disco). Não precisa ser preciso ao
+// segundo — só não pode deixar acumular mídia velha indefinidamente.
+const STATUS_CLEANUP_INTERVAL_MS = 15 * 60 * 1000;
 
 class WhatsAppService {
   private socket: WASocket | null = null;
@@ -43,6 +59,9 @@ class WhatsAppService {
   // evita bater no groupMetadata do WhatsApp toda hora só pra exibir/gravar
   // o nome de um grupo que a gente já sabe
   private groupNameCache = new Map<string, string>();
+  // evita agendar o setInterval de limpeza de status mais de uma vez —
+  // start() pode rodar de novo em cada reconexão (queda de rede, logout etc.)
+  private statusCleanupScheduled = false;
 
   getStatus(): WhatsAppStatus {
     return this.status;
@@ -104,6 +123,12 @@ class WhatsAppService {
       this.socket.ev.on("messaging-history.set", (payload) => {
         void this.handleHistorySync(payload as { messages?: WAMessage[] });
       });
+
+      if (!this.statusCleanupScheduled) {
+        this.statusCleanupScheduled = true;
+        this.cleanupExpiredStatuses(); // já limpa uma vez ao subir, sem esperar o primeiro tick
+        setInterval(() => this.cleanupExpiredStatuses(), STATUS_CLEANUP_INTERVAL_MS).unref();
+      }
     } catch (err) {
       logger.error({ err }, "falha ao iniciar sessão do WhatsApp — tentando de novo em breve");
       this.setStatus("disconnected");
@@ -398,6 +423,76 @@ class WhatsAppService {
     wsHub.broadcast("whatsapp", "block_status", { jid: resolvedJid, blocked: block });
   }
 
+  // fixa/desafixa uma conversa ou grupo. O espelhamento no app oficial do
+  // WhatsApp é best-effort (o Baileys não garante sincronizar isso em todo
+  // dispositivo) — o que é garantido é o estado aqui no painel da Ley, que é
+  // o que decide a ordem da lista (fixados primeiro).
+  async pinChat(jid: string, pinned: boolean): Promise<void> {
+    const resolvedJid = jid.includes("@") ? jid : (await this.verifyJidExists(jid));
+
+    if (this.socket && this.status === "connected") {
+      try {
+        await this.socket.chatModify({ pin: pinned }, resolvedJid);
+      } catch (err) {
+        logger.error({ err, jid: resolvedJid }, "falha ao espelhar fixar/desafixar no WhatsApp (segue só localmente)");
+      }
+    }
+
+    setContactPinned(resolvedJid, pinned);
+    wsHub.broadcast("whatsapp", "chat_pinned", { jid: resolvedJid, pinned });
+  }
+
+  // apaga todo o histórico de uma conversa/grupo aqui no painel (mantém o
+  // contato). O apagar "de verdade" no WhatsApp também é tentado, mas como
+  // best-effort — sem o histórico completo sincronizado (o Baileys não
+  // mantém isso por padrão), o WhatsApp pode ignorar o pedido do lado dele.
+  async clearChat(jid: string): Promise<void> {
+    const resolvedJid = jid.includes("@") ? jid : (await this.verifyJidExists(jid));
+
+    if (this.socket && this.status === "connected") {
+      try {
+        await this.socket.chatModify({ clear: true, lastMessages: this.lastMessagesFor(resolvedJid) }, resolvedJid);
+      } catch (err) {
+        logger.error({ err, jid: resolvedJid }, "falha ao espelhar limpeza de conversa no WhatsApp (segue só localmente)");
+      }
+    }
+
+    clearMessagesByJid(resolvedJid);
+    wsHub.broadcast("whatsapp", "chat_cleared", { jid: resolvedJid });
+  }
+
+  // remove a conversa/grupo inteiro daqui (contato + mensagens). Igual ao
+  // clearChat, o "excluir" espelhado no WhatsApp é best-effort.
+  async deleteChat(jid: string): Promise<void> {
+    const resolvedJid = jid.includes("@") ? jid : (await this.verifyJidExists(jid));
+
+    if (this.socket && this.status === "connected") {
+      try {
+        await this.socket.chatModify({ delete: true, lastMessages: this.lastMessagesFor(resolvedJid) }, resolvedJid);
+      } catch (err) {
+        logger.error({ err, jid: resolvedJid }, "falha ao espelhar exclusão de conversa no WhatsApp (segue só localmente)");
+      }
+    }
+
+    deleteContactAndMessages(resolvedJid);
+    wsHub.broadcast("whatsapp", "chat_deleted", { jid: resolvedJid });
+  }
+
+  // monta o "lastMessages" que o Baileys pede pra clear/delete — só a última
+  // mensagem que a gente já tem salva localmente da conversa (formato mínimo:
+  // key + timestamp). Se não tiver nenhuma, manda vazio: a limpeza local
+  // continua valendo, só o espelhamento no WhatsApp que pode não ter efeito.
+  private lastMessagesFor(jid: string) {
+    const [last] = listMessagesByJid(jid, 1);
+    if (!last) return [];
+    return [
+      {
+        key: { remoteJid: jid, id: last.id, fromMe: !!last.from_me },
+        messageTimestamp: Math.floor(last.created_at / 1000),
+      },
+    ];
+  }
+
   // liga/desliga o "digitando..." pra uma conversa — usado pelo autopilot
   // pra parecer mais natural antes de mandar a resposta gerada. Não crítico:
   // qualquer erro aqui é só logado, nunca deve travar o envio da mensagem.
@@ -537,7 +632,17 @@ class WhatsAppService {
     msg: WAMessage
   ): Promise<{ jid: string; isGroup: boolean; fromMe: boolean; type: "text" | "audio" | "other"; textForGate: string | null } | null> {
     const jid = msg.key.remoteJid;
-    if (!jid || jid === "status@broadcast") return null;
+
+    // status@broadcast é o "canal" especial que o Baileys usa pra atualizações
+    // de Status (as postagens de 24h) — não é uma conversa de verdade, então
+    // nunca deve virar uma linha em wa_messages. Antes isso era só ignorado
+    // (return null); agora é desviado pro handler que salva em wa_statuses e
+    // alimenta a tirinha de Status do painel.
+    if (jid === "status@broadcast") {
+      void this.persistStatusUpdate(msg);
+      return null;
+    }
+    if (!jid) return null;
     if (!msg.message) return null; // mensagens de protocolo (reação, exclusão, recibo etc.)
 
     const fromMe = !!msg.key.fromMe;
@@ -598,6 +703,37 @@ class WhatsAppService {
       } catch (err) {
         logger.error({ err }, "falha ao baixar/transcrever áudio recebido do WhatsApp");
       }
+    } else if (content.imageMessage || content.videoMessage) {
+      // Foto/vídeo recebido (de conversa ou de grupo). Antes disso, uma
+      // imagem/vídeo COM legenda virava só uma mensagem de texto (a legenda)
+      // e o arquivo em si nunca era baixado — "sumia". Agora baixa o arquivo
+      // de verdade e guarda como 'other' + media_path, que é o mesmo formato
+      // que o front-end (WhatsAppTab) já sabe renderizar como miniatura/
+      // player (ver renderMessageBody), igual mídia enviada por nós.
+      type = "other";
+      const isVideo = !!content.videoMessage;
+      mediaMimetype = (isVideo ? content.videoMessage?.mimetype : content.imageMessage?.mimetype) ?? (isVideo ? "video/mp4" : "image/jpeg");
+      text = textBody ?? (isVideo ? "Vídeo" : "Foto");
+
+      try {
+        const buffer = (await downloadMediaMessage(
+          msg,
+          "buffer",
+          {},
+          {
+            logger: logger.child({ module: "baileys-media" }) as never,
+            reuploadRequest: this.socket!.updateMediaMessage,
+          }
+        )) as Buffer;
+
+        const ext = mediaMimetype.split("/")[1]?.split(";")[0] ?? (isVideo ? "mp4" : "jpg");
+        fs.mkdirSync(MEDIA_DIR, { recursive: true });
+        const filePath = path.join(MEDIA_DIR, `${id}.${ext}`);
+        fs.writeFileSync(filePath, buffer);
+        mediaPath = filePath;
+      } catch (err) {
+        logger.error({ err }, "falha ao baixar imagem/vídeo recebido do WhatsApp");
+      }
     } else if (textBody) {
       type = "text";
       text = textBody;
@@ -626,6 +762,161 @@ class WhatsAppService {
     wsHub.broadcast("whatsapp", "message", { ...row, seen: fromMe ? 1 : 0 });
 
     return { jid, isGroup, fromMe, type, textForGate: type === "audio" ? transcript : text };
+  }
+
+  // salva uma atualização de Status (foto, vídeo ou texto) chegada via
+  // status@broadcast. "quem postou" vem de key.participant — em
+  // status@broadcast o remoteJid é sempre o pseudo-jid do canal, nunca a
+  // pessoa; participant é o jid real do contato dono do status.
+  private async persistStatusUpdate(msg: WAMessage): Promise<void> {
+    const posterJid = msg.key.participant ?? msg.key.remoteJid;
+    if (!posterJid || !msg.message) return;
+
+    const id = msg.key.id ?? randomUUID();
+    const senderName = msg.pushName ?? null;
+    const content = msg.message;
+
+    // um status recebido de alguém que a Ley nunca tinha visto ainda salva o
+    // contato aqui — sem isso o nome não aparece na tirinha, só o número.
+    if (!posterJid.endsWith("@g.us")) upsertContact(posterJid, senderName);
+
+    let type: WaStatusType = "text";
+    let text: string | null = null;
+    let bgColor: string | null = null;
+    let mediaPath: string | null = null;
+    let mediaMimetype: string | null = null;
+
+    if (content.imageMessage || content.videoMessage) {
+      const isVideo = !!content.videoMessage;
+      type = isVideo ? "video" : "image";
+      mediaMimetype =
+        (isVideo ? content.videoMessage?.mimetype : content.imageMessage?.mimetype) ??
+        (isVideo ? "video/mp4" : "image/jpeg");
+      text = content.imageMessage?.caption ?? content.videoMessage?.caption ?? null;
+
+      try {
+        const buffer = (await downloadMediaMessage(
+          msg,
+          "buffer",
+          {},
+          {
+            logger: logger.child({ module: "baileys-media" }) as never,
+            reuploadRequest: this.socket!.updateMediaMessage,
+          }
+        )) as Buffer;
+
+        const ext = mediaMimetype.split("/")[1]?.split(";")[0] ?? (isVideo ? "mp4" : "jpg");
+        fs.mkdirSync(MEDIA_DIR, { recursive: true });
+        // prefixo "status-" pra nunca colidir com o arquivo de uma mensagem
+        // normal que por acaso tenha o mesmo id
+        const filePath = path.join(MEDIA_DIR, `status-${id}.${ext}`);
+        fs.writeFileSync(filePath, buffer);
+        mediaPath = filePath;
+      } catch (err) {
+        logger.error({ err }, "falha ao baixar mídia de Status do WhatsApp");
+        return; // sem a mídia baixada, não vale a pena salvar um status de foto/vídeo quebrado
+      }
+    } else if (content.extendedTextMessage?.text) {
+      // status de "aa" (só texto com fundo colorido) — o Baileys expõe a cor
+      // de fundo escolhida pela pessoa em backgroundColor (ARGB hex)
+      type = "text";
+      text = content.extendedTextMessage.text;
+      // vem como int32 ARGB (ex: -12345678); os 6 dígitos hex de menor ordem
+      // já são o RGB puro (o byte de alfa mais significativo é descartado),
+      // que é exatamente o que o CSS "#rrggbb" do front-end espera.
+      const argb = content.extendedTextMessage.backgroundArgb;
+      bgColor = typeof argb === "number" ? `#${(argb >>> 0).toString(16).padStart(8, "0").slice(2)}` : null;
+    } else {
+      return; // tipo de status ainda não suportado (ex: enquete) — ignora por ora
+    }
+
+    const createdAt =
+      typeof msg.messageTimestamp === "number" ? msg.messageTimestamp * 1000 : Date.now();
+
+    const row = {
+      id,
+      jid: posterJid,
+      sender_name: senderName,
+      type,
+      text,
+      bg_color: bgColor,
+      media_path: mediaPath,
+      media_mimetype: mediaMimetype,
+      created_at: createdAt,
+      expires_at: createdAt + STATUS_TTL_MS,
+    };
+
+    saveStatus(row);
+    wsHub.broadcast("whatsapp", "wa_status", { ...row, seen: 0 });
+  }
+
+  // responde a um status: no WhatsApp de verdade isso vira uma mensagem
+  // DIRETA pro dono do status (nunca pública), citando o status como
+  // contexto — é exatamente esse o comportamento que replicamos aqui.
+  // Como o Baileys não guarda o WAMessage bruto do status (só processamos
+  // ele pra salvar em wa_statuses e descartamos o original), reconstruímos
+  // um "quoted" mínimo a partir do que temos salvo: é o suficiente pra
+  // sendMessage anexar o stanzaId/participant certos na contextInfo, que é
+  // o que faz o WhatsApp do outro lado mostrar "respondeu ao seu status".
+  async replyToStatus(statusId: string, text: string): Promise<void> {
+    if (!this.socket || this.status !== "connected") {
+      throw new Error("WhatsApp não está conectado");
+    }
+
+    const status = getStatusById(statusId);
+    if (!status) {
+      throw new Error("status não encontrado (pode já ter expirado)");
+    }
+
+    const resolvedJid = await this.verifyJidExists(status.jid);
+
+    const quoted = {
+      key: {
+        remoteJid: "status@broadcast",
+        id: status.id,
+        participant: status.jid,
+        fromMe: false,
+      },
+      message: this.buildQuotedStatusMessage(status),
+      messageTimestamp: Math.floor(status.created_at / 1000),
+    } as unknown as WAMessage;
+
+    const sent = await this.socket.sendMessage(resolvedJid, { text }, { quoted });
+    this.persistOutgoingMessage(resolvedJid, sent, { type: "text", text });
+  }
+
+  // conteúdo mínimo do "quoted" pro reply de status, no formato de cada
+  // tipo — só o suficiente pra contextInfo ficar coerente; não precisa dos
+  // metadados completos de mídia (chave, sha256 etc.) porque não estamos
+  // reenviando esse conteúdo, só referenciando o id original.
+  private buildQuotedStatusMessage(status: WaStatusRow): Record<string, unknown> {
+    if (status.type === "image") {
+      return { imageMessage: { caption: status.text ?? undefined, mimetype: status.media_mimetype ?? "image/jpeg" } };
+    }
+    if (status.type === "video") {
+      return { videoMessage: { caption: status.text ?? undefined, mimetype: status.media_mimetype ?? "video/mp4" } };
+    }
+    return { extendedTextMessage: { text: status.text ?? "" } };
+  }
+
+  // varre wa_statuses por status vencidos (>24h), apaga o arquivo de mídia
+  // de cada um no disco (se houver) e depois a(s) linha(s) do banco.
+  private cleanupExpiredStatuses(): void {
+    try {
+      const expired = deleteExpiredStatuses();
+      for (const status of expired) {
+        if (status.media_path) {
+          fs.rm(status.media_path, { force: true }, (err) => {
+            if (err) logger.error({ err, path: status.media_path }, "falha ao apagar mídia de status vencido");
+          });
+        }
+      }
+      if (expired.length > 0) {
+        wsHub.broadcast("whatsapp", "wa_status_expired", { ids: expired.map((s) => s.id) });
+      }
+    } catch (err) {
+      logger.error({ err }, "falha ao limpar status vencidos");
+    }
   }
 
   // só processa mensagens de até 3 dias atrás — o suficiente pra cobrir "o

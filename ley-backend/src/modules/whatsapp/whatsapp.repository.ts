@@ -23,6 +23,23 @@ export interface WaContactRow {
   updated_at: number;
   source?: "seen" | "saved";
   is_group?: number;
+  pinned?: number;
+}
+
+export type WaStatusType = "image" | "video" | "text";
+
+export interface WaStatusRow {
+  id: string;
+  jid: string;
+  sender_name: string | null;
+  type: WaStatusType;
+  text: string | null;
+  bg_color: string | null;
+  media_path: string | null;
+  media_mimetype: string | null;
+  seen: number;
+  created_at: number;
+  expires_at: number;
 }
 
 const stmts = {
@@ -77,7 +94,7 @@ const stmts = {
   markAllSeen: db.prepare(`UPDATE wa_messages SET seen = 1 WHERE seen = 0`),
   markSeenByJid: db.prepare(`UPDATE wa_messages SET seen = 1 WHERE jid = ? AND seen = 0`),
   getById: db.prepare(`SELECT * FROM wa_messages WHERE id = ?`),
-  listContacts: db.prepare(`SELECT * FROM wa_contacts ORDER BY updated_at DESC`),
+  listContacts: db.prepare(`SELECT * FROM wa_contacts ORDER BY pinned DESC, updated_at DESC`),
   getContactByJid: db.prepare(`SELECT * FROM wa_contacts WHERE jid = ?`),
   getSetting: db.prepare(`SELECT value FROM wa_settings WHERE key = ?`),
   upsertSetting: db.prepare(`
@@ -91,6 +108,20 @@ const stmts = {
   insertBareContact: db.prepare(`
     INSERT INTO wa_contacts (jid, name, updated_at, is_group) VALUES (@jid, NULL, @updated_at, @is_group)
   `),
+  insertStatus: db.prepare(`
+    INSERT INTO wa_statuses
+      (id, jid, sender_name, type, text, bg_color, media_path, media_mimetype, seen, created_at, expires_at)
+    VALUES
+      (@id, @jid, @sender_name, @type, @text, @bg_color, @media_path, @media_mimetype, @seen, @created_at, @expires_at)
+    ON CONFLICT(id) DO NOTHING
+  `),
+  // só status ainda dentro das 24h (expires_at no futuro), mais recente primeiro
+  listActiveStatuses: db.prepare(
+    `SELECT * FROM wa_statuses WHERE expires_at > ? ORDER BY created_at DESC`
+  ),
+  markStatusSeen: db.prepare(`UPDATE wa_statuses SET seen = 1 WHERE id = ?`),
+  listExpiredStatuses: db.prepare(`SELECT * FROM wa_statuses WHERE expires_at <= ?`),
+  deleteExpiredStatuses: db.prepare(`DELETE FROM wa_statuses WHERE expires_at <= ?`),
 };
 
 // só atualiza o nome quando vier um pushName de verdade — evita sobrescrever
@@ -316,4 +347,58 @@ function normalize(text: string): string {
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .trim();
+}
+
+// fixa/desafixa uma conversa ou grupo — decide a ordem em listContacts
+// (fixados sempre primeiro). Cria o contato se ainda não existir (mesmo
+// padrão usado em setContactAutopilot/setAudioOptOut acima).
+export function setContactPinned(jid: string, pinned: boolean): void {
+  const exists = stmts.getContactByJid.get(jid);
+  if (!exists) {
+    stmts.insertBareContact.run({ jid, updated_at: Date.now(), is_group: jid.endsWith("@g.us") ? 1 : 0 });
+  }
+  db.prepare(`UPDATE wa_contacts SET pinned = ? WHERE jid = ?`).run(pinned ? 1 : 0, jid);
+}
+
+// apaga todo o histórico de mensagens de uma conversa/grupo, mantendo o
+// contato salvo (usado pelo "Limpar conversa" no painel).
+export function clearMessagesByJid(jid: string): void {
+  db.prepare(`DELETE FROM wa_messages WHERE jid = ?`).run(jid);
+}
+
+// remove a conversa/grupo inteiro: contato + todas as mensagens (usado pelo
+// "Excluir conversa" no painel).
+export function deleteContactAndMessages(jid: string): void {
+  db.prepare(`DELETE FROM wa_messages WHERE jid = ?`).run(jid);
+  db.prepare(`DELETE FROM wa_contacts WHERE jid = ?`).run(jid);
+}
+
+// grava uma atualização de Status (idempotente por id, igual saveMessage —
+// o Baileys pode reemitir a mesma atualização mais de uma vez).
+export function saveStatus(row: Omit<WaStatusRow, "seen"> & { seen?: number }): void {
+  stmts.insertStatus.run({ ...row, seen: row.seen ?? 0 });
+}
+
+// status ainda dentro da janela de 24h, mais recentes primeiro
+export function listActiveStatuses(): WaStatusRow[] {
+  return stmts.listActiveStatuses.all(Date.now()) as WaStatusRow[];
+}
+
+export function getStatusById(id: string): WaStatusRow | undefined {
+  return db.prepare(`SELECT * FROM wa_statuses WHERE id = ?`).get(id) as WaStatusRow | undefined;
+}
+
+// marca como visto (local ao painel, não sincroniza com o WhatsApp) —
+// controla só o anel da tirinha de status
+export function markStatusSeen(id: string): boolean {
+  const info = stmts.markStatusSeen.run(id);
+  return info.changes > 0;
+}
+
+// devolve (antes de apagar) os status vencidos, pra quem chamar poder
+// remover os arquivos de mídia no disco também, depois apaga as linhas
+export function deleteExpiredStatuses(): WaStatusRow[] {
+  const expired = stmts.listExpiredStatuses.all(Date.now()) as WaStatusRow[];
+  if (expired.length > 0) stmts.deleteExpiredStatuses.run(Date.now());
+  return expired;
 }

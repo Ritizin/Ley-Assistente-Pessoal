@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { API_BASE_URL } from '../config/api'
 import { Mic, Send, User, Square, Trash2, Paperclip, Camera, X, ChevronDown, Cpu, FileText, Copy, Check } from 'lucide-react'
 import VoiceModal from './VoiceModal'
-import { MessageContent } from './GeneratedContent'
+import { MessageContent, parseMessageContent } from './GeneratedContent'
 import LeyAvatar from './LeyAvatar'
 
 interface ChatMessage {
@@ -37,9 +37,13 @@ interface ChatTabProps {
   // usado aqui pra receber avisos que o backend manda sozinho (ex: "fulano te
   // mandou mensagem no zap"), sem precisar o usuário mandar nada primeiro.
   onChatEvent?: (fn: (data: any) => void) => () => void
+  // dispara toda vez que uma resposta da Ley traz um ou mais blocos de
+  // arquivo (```linguagem path="..."), pro App.tsx decidir se entra no
+  // projeto ativo e abrir o painel lateral
+  onFilesGenerated?: (files: { path: string; content: string }[]) => void
 }
 
-export default function ChatTab({ onChatEvent }: ChatTabProps) {
+export default function ChatTab({ onChatEvent, onFilesGenerated }: ChatTabProps) {
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEY_HISTORY)
     return saved ? JSON.parse(saved) : []
@@ -177,6 +181,18 @@ export default function ChatTab({ onChatEvent }: ChatTabProps) {
         { id: crypto.randomUUID(), role: 'ley', content: replyText },
       ])
       setAwaitingVoiceRecording(!!data.awaitingVoiceRecording)
+
+      // se a resposta veio com bloco(s) de arquivo, avisa o App (que decide
+      // se entra no projeto ativo) e abre o painel lateral, igual ao Claude
+      // quando termina de gerar um código/arquivo
+      if (onFilesGenerated) {
+        const fileSegs = parseMessageContent(replyText).filter(
+          (s): s is Extract<typeof s, { type: 'file' }> => s.type === 'file' && s.lang !== 'audio'
+        )
+        if (fileSegs.length > 0) {
+          onFilesGenerated(fileSegs.map((f) => ({ path: f.path, content: f.content })))
+        }
+      }
 
       return replyText
     } catch (err) {
@@ -447,7 +463,7 @@ export default function ChatTab({ onChatEvent }: ChatTabProps) {
                 }`}
               >
                 {m.role === 'user' ? (
-                  <div className="rounded-2xl rounded-tr-sm bg-cobalt-500/15 px-4 py-2.5 text-sm leading-relaxed text-slate-100 shadow-md ring-1 ring-cobalt-500/20">
+                  <div className="rounded-2xl rounded-tr-sm border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm leading-relaxed text-slate-100 shadow-md backdrop-blur-xl">
                     {m.content}
                   </div>
                 ) : (
@@ -484,7 +500,7 @@ export default function ChatTab({ onChatEvent }: ChatTabProps) {
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
                 <LeyAvatar size={30} active />
               </div>
-              <div className="flex items-center gap-1 rounded-2xl rounded-tl-sm bg-midnight-800 px-4 py-3 ring-1 ring-white/5">
+              <div className="flex items-center gap-1 rounded-2xl rounded-tl-sm border border-white/10 bg-white/[0.03] px-4 py-3 backdrop-blur-xl">
                 <span className="text-xs text-slate-400 mr-1">Ley digitando</span>
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-electric-400" />
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-electric-400" />
@@ -545,7 +561,7 @@ export default function ChatTab({ onChatEvent }: ChatTabProps) {
             </div>
           )}
 
-          <div className="flex items-center gap-3 rounded-xl border border-electric-500/20 bg-midnight-800 px-3 py-2 shadow-inner">
+          <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 shadow-inner backdrop-blur-xl">
             {/* input escondido: anexar qualquer tipo de arquivo */}
             <input
               ref={fileInputRef}

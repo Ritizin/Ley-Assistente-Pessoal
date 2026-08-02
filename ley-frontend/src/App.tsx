@@ -14,6 +14,17 @@ import NotificationsTab, {
 } from './components/NotificationsTab'
 import { useLeyWebSocket } from './hooks/useLeyWebSocket'
 import { playNotificationSound } from './utils/notificationSound'
+import ProjectsPanel from './components/ProjectsPanel'
+import FilesPanel from './components/FilesPanel'
+import {
+  type Project,
+  type ProjectFile,
+  loadProjects,
+  saveProjects,
+  loadActiveProjectId,
+  saveActiveProjectId,
+  mergeFilesIntoProject,
+} from './types/projects'
 
 interface AuthUser {
   id: number
@@ -30,6 +41,79 @@ export default function App() {
   // avisos de mensagem nova no WhatsApp, agrupados por contato/grupo — vira
   // a aba "Notificações" e a bolinha de contagem no menu lateral
   const [notifications, setNotifications] = useState<NotificationGroup[]>([])
+
+  // ---- Projetos (arquivos que a Ley cria/edita no chat) ----
+  const [projects, setProjects] = useState<Project[]>(() => loadProjects())
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(() => loadActiveProjectId())
+  const [panelOpen, setPanelOpen] = useState(false)
+  const [panelFiles, setPanelFiles] = useState<ProjectFile[]>([])
+  const [panelGenId, setPanelGenId] = useState(0)
+
+  useEffect(() => {
+    saveProjects(projects)
+  }, [projects])
+
+  useEffect(() => {
+    saveActiveProjectId(activeProjectId)
+  }, [activeProjectId])
+
+  const activeProject = projects.find((p) => p.id === activeProjectId) ?? null
+
+  const handleCreateProject = (name: string) => {
+    const project: Project = {
+      id: crypto.randomUUID(),
+      name,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      files: [],
+    }
+    setProjects((prev) => [...prev, project])
+    setActiveProjectId(project.id)
+    setActiveTab('chat')
+  }
+
+  const handleOpenProject = (id: string) => {
+    const project = projects.find((p) => p.id === id)
+    if (!project) return
+    setActiveProjectId(id)
+    if (project.files.length > 0) {
+      setPanelFiles(project.files)
+      setPanelGenId((g) => g + 1)
+      setPanelOpen(true)
+    }
+  }
+
+  // chamado pelo ChatTab toda vez que uma resposta da Ley traz arquivo(s)
+  // (bloco ```linguagem path="..."). Se tiver um projeto ativo, os arquivos
+  // entram nele (criados ou editados); senão ficam "soltos" no painel, com
+  // opção de virar projeto depois.
+  const handleFilesGenerated = (files: { path: string; content: string }[]) => {
+    if (files.length === 0) return
+
+    if (activeProject) {
+      const updated = mergeFilesIntoProject(activeProject, files)
+      setProjects((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
+      setPanelFiles(updated.files.filter((f) => files.some((inc) => inc.path === f.path)))
+    } else {
+      setPanelFiles(files.map((f) => ({ ...f, status: 'created' as const })))
+    }
+    setPanelGenId((g) => g + 1)
+    setPanelOpen(true)
+  }
+
+  const handleSaveUnsavedAsProject = () => {
+    const name = window.prompt('Nome do projeto:')
+    if (!name?.trim()) return
+    const project: Project = {
+      id: crypto.randomUUID(),
+      name: name.trim(),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      files: panelFiles,
+    }
+    setProjects((prev) => [...prev, project])
+    setActiveProjectId(project.id)
+  }
   const {
     connected,
     onChatEvent,
@@ -194,7 +278,15 @@ export default function App() {
           </div>
         ) : (
           <>
-            {activeTab === 'chat' && <ChatTab onChatEvent={onChatEvent} />}
+            {activeTab === 'chat' && <ChatTab onChatEvent={onChatEvent} onFilesGenerated={handleFilesGenerated} />}
+            {activeTab === 'projects' && (
+              <ProjectsPanel
+                projects={projects}
+                activeProjectId={activeProjectId}
+                onCreate={handleCreateProject}
+                onOpen={handleOpenProject}
+              />
+            )}
             {activeTab === 'notifications' && (
               <NotificationsTab groups={notifications} onOpen={openFromNotification} />
             )}
@@ -221,6 +313,17 @@ export default function App() {
           </>
         )}
       </main>
+
+      {authUser && (
+        <FilesPanel
+          open={panelOpen}
+          onClose={() => setPanelOpen(false)}
+          files={panelFiles}
+          genId={panelGenId}
+          projectName={activeProject?.name ?? null}
+          onSaveAsProject={activeProject ? undefined : handleSaveUnsavedAsProject}
+        />
+      )}
     </div>
   )
 }

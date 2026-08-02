@@ -614,7 +614,7 @@ export function MessageContent({ content }: { content: string }) {
       {files.length > 0 && (
         <div className="flex flex-col gap-2 border-t border-white/10 pt-2.5">
           <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
-            {files.length > 1 ? 'Arquivos gerados' : 'Arquivo gerado'}
+            {files.length > 1 ? `Ley criou ${files.length} arquivos` : `Ley criou ${baseNameOf(files[0].path)}`}
           </span>
           {files.map((f, i) => (
             <FileCard key={i} path={f.path} content={f.content} />

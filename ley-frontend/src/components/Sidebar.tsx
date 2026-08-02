@@ -1,7 +1,7 @@
-import { MessageSquare, ListChecks, Circle, MessageCircle, Bell, Plug, LogOut } from 'lucide-react'
+import { MessageSquare, ListChecks, Circle, MessageCircle, Bell, Plug, LogOut, FolderKanban } from 'lucide-react'
 import LeyAvatar from './LeyAvatar'
 
-export type TabId = 'chat' | 'tasks' | 'whatsapp' | 'connections' | 'notifications'
+export type TabId = 'chat' | 'tasks' | 'whatsapp' | 'connections' | 'notifications' | 'projects'
 
 interface SidebarProps {
   active: TabId
@@ -19,6 +19,7 @@ interface SidebarProps {
 
 const NAV_ITEMS: { id: TabId; label: string; icon: typeof MessageSquare }[] = [
   { id: 'chat', label: 'Chat', icon: MessageSquare },
+  { id: 'projects', label: 'Projetos', icon: FolderKanban },
   { id: 'notifications', label: 'Notificações', icon: Bell },
   { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle },
   { id: 'connections', label: 'Conexões', icon: Plug },
@@ -76,34 +77,36 @@ export default function Sidebar({
           </nav>
         </div>
 
-        <div
-          className={`flex items-center gap-2 rounded-lg border px-3 py-2.5 text-xs ${
-            wsConnected ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-rose-500/20 bg-rose-500/5'
-          }`}
-        >
-          <Circle
-            size={8}
-            fill={wsConnected ? '#10b981' : '#f43f5e'}
-            className={wsConnected ? 'text-emerald-500 animate-pulseDot' : 'text-rose-500 animate-pulseDot'}
-          />
-          <span className={wsConnected ? 'text-emerald-400' : 'text-rose-400'}>
-            {wsConnected ? 'Servidor Online' : 'Servidor Off'}
-          </span>
-        </div>
-
-        {userLabel && (
-          <div className="mt-2 flex items-center gap-2 rounded-lg border border-white/5 bg-midnight-800/60 px-3 py-2.5 text-xs">
-            <span className="flex-1 truncate text-slate-400">{userLabel}</span>
-            <button
-              onClick={onLogout}
-              title="Sair"
-              className="flex items-center gap-1 rounded-md px-1.5 py-1 text-slate-500 transition hover:bg-white/5 hover:text-rose-400"
-            >
-              <LogOut size={13} />
-              Sair
-            </button>
+        <div className="flex flex-col gap-2">
+          <div
+            className={`flex items-center gap-2 rounded-lg border px-3 py-2.5 text-xs ${
+              wsConnected ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-rose-500/20 bg-rose-500/5'
+            }`}
+          >
+            <Circle
+              size={8}
+              fill={wsConnected ? '#10b981' : '#f43f5e'}
+              className={wsConnected ? 'text-emerald-500 animate-pulseDot' : 'text-rose-500 animate-pulseDot'}
+            />
+            <span className={wsConnected ? 'text-emerald-400' : 'text-rose-400'}>
+              {wsConnected ? 'Servidor Online' : 'Servidor Off'}
+            </span>
           </div>
-        )}
+
+          {userLabel && (
+            <div className="flex items-center gap-2 rounded-lg border border-white/5 bg-midnight-800/60 px-3 py-2.5 text-xs">
+              <span className="flex-1 truncate text-slate-400">{userLabel}</span>
+              <button
+                onClick={onLogout}
+                title="Sair"
+                className="flex items-center gap-1 rounded-md px-1.5 py-1 text-slate-500 transition hover:bg-white/5 hover:text-rose-400"
+              >
+                <LogOut size={13} />
+                Sair
+              </button>
+            </div>
+          )}
+        </div>
       </aside>
 
       {/* ===== Mobile: barra superior compacta (< md) ===== */}
