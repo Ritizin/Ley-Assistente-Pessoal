@@ -30,7 +30,25 @@ echo "==> Instalando dependências e compilando o backend..."
 # devDependencies (typescript, tsx, todos os @types/*), e o build quebra
 # com "Could not find a declaration file for module 'X'" pra várias libs.
 npm ci --include=dev
-npm run build
+
+# Chama o compilador direto via `node .../tsc.js` em vez de `npm run build`
+# (que roda o "tsc" cru esperando o PATH resolver certo). Motivo: em pelo
+# menos um deploy real, isso resolveu pra um pacote de PIADA publicado no
+# npm com o nome "tsc" (que só imprime uma mensagem e sai com status 0) em
+# vez do compilador de verdade — o build passava como "successful" sem
+# gerar nada em dist/, e o deploy só quebrava depois, no start ("Cannot
+# find module dist/bootstrap.js"). Chamando o arquivo direto do
+# node_modules instalado localmente, não tem ambiguidade nenhuma possível.
+node node_modules/typescript/lib/tsc.js -p tsconfig.json
+
+# checagem de sanidade: se por qualquer motivo o build "passar" sem gerar o
+# arquivo de entrada de verdade, falha AGORA (build) em vez de falhar depois
+# (start) com um erro bem mais confuso.
+if [ ! -f "dist/bootstrap.js" ]; then
+  echo "==> ERRO: dist/bootstrap.js não foi gerado pelo build do TypeScript." >&2
+  echo "==> Isso não deveria acontecer — investiga o output do tsc acima." >&2
+  exit 1
+fi
 
 echo "==> Preparando o Piper TTS em ${VENDOR_DIR}..."
 mkdir -p "${VENDOR_DIR}/voices"
