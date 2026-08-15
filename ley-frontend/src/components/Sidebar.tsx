@@ -1,5 +1,6 @@
-import { MessageSquare, ListChecks, Circle, MessageCircle, Bell, Plug, LogOut, FolderKanban } from 'lucide-react'
+import { MessageSquare, ListChecks, Circle, MessageCircle, Bell, Plug, LogOut, FolderKanban, Laptop, Cloud } from 'lucide-react'
 import LeyAvatar from './LeyAvatar'
+import { getBackendMode, setBackendMode } from '../config/api'
 
 export type TabId = 'chat' | 'tasks' | 'whatsapp' | 'connections' | 'notifications' | 'projects'
 
@@ -88,9 +89,21 @@ export default function Sidebar({
               fill={wsConnected ? '#10b981' : '#f43f5e'}
               className={wsConnected ? 'text-emerald-500 animate-pulseDot' : 'text-rose-500 animate-pulseDot'}
             />
-            <span className={wsConnected ? 'text-emerald-400' : 'text-rose-400'}>
+            <span className={`flex-1 ${wsConnected ? 'text-emerald-400' : 'text-rose-400'}`}>
               {wsConnected ? 'Servidor Online' : 'Servidor Off'}
             </span>
+            <button
+              onClick={() => setBackendMode(getBackendMode() === 'local' ? 'production' : 'local')}
+              title={
+                getBackendMode() === 'local'
+                  ? 'Falando com localhost:3000 — clica pra voltar pro backend atual'
+                  : 'Falando com o backend atual — clica pra usar localhost:3000'
+              }
+              className="flex items-center gap-1 rounded-md border border-white/5 px-1.5 py-1 text-[10px] text-slate-500 transition hover:bg-white/5 hover:text-slate-300"
+            >
+              {getBackendMode() === 'local' ? <Laptop size={11} /> : <Cloud size={11} />}
+              {getBackendMode() === 'local' ? 'Local' : 'Atual'}
+            </button>
           </div>
 
           {userLabel && (
