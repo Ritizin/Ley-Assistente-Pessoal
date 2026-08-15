@@ -161,6 +161,19 @@ export default function App() {
     }
   }, [authUser])
 
+  // reforço além do WebSocket, mesmo motivo do polling em WhatsAppTab.tsx:
+  // catch-up de segurança pra quando o serviço "dorme" no plano free do
+  // Render e perde mensagens em tempo real nesse intervalo.
+  useEffect(() => {
+    if (!authUser) return
+    const interval = setInterval(() => {
+      Promise.all([fetchUnreadNotifications(), fetchContactNames()])
+        .then(([messages, names]) => setNotifications(groupUnreadMessages(messages, names)))
+        .catch(() => {})
+    }, 5_000)
+    return () => clearInterval(interval)
+  }, [authUser])
+
   // tempo real: toda mensagem nova recebida (não enviada por nós) atualiza
   // o grupo daquele jid, sem precisar recarregar a lista inteira
   useEffect(() => {

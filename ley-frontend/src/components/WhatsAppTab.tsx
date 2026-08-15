@@ -574,6 +574,20 @@ export default function WhatsAppTab({ onWhatsAppEvent, focusJid, focusName, onFo
     if (status === 'connected') loadMessages()
   }, [status, loadMessages])
 
+  // reforço além do WebSocket: no plano free do Render, o serviço "dorme"
+  // depois de alguns minutos sem uso e o WhatsApp fica sem conexão nesse
+  // meio tempo — o WS reconecta sozinho quando alguém abre o painel de
+  // novo, mas mensagens que chegaram durante o sono podem não ter sido
+  // notificadas em tempo real. Esse polling é só um catch-up de segurança
+  // (o tempo real continua sendo o WS acima) — 5s é o equilíbrio entre
+  // "atualiza rápido" e "não martela o backend/banco à toa"; 1s seria
+  // 5x mais chamadas sem ganho perceptível pro usuário.
+  useEffect(() => {
+    if (status !== 'connected') return
+    const interval = setInterval(loadMessages, 5_000)
+    return () => clearInterval(interval)
+  }, [status, loadMessages])
+
   const markSeen = useCallback((id: string) => {
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, seen: 1 } : m)))
     fetch(`${API_BASE}/api/whatsapp/messages/${id}/seen`, { method: 'POST' }).catch(() => {
