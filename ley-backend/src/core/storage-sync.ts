@@ -169,7 +169,7 @@ let backupInterval: NodeJS.Timeout | null = null;
  * independentes correndo em paralelo podiam matar o processo antes do
  * backup terminar de subir pro Postgres).
  */
-export function startPeriodicBackup(intervalMs = 2 * 60 * 1000): void {
+export function startPeriodicBackup(intervalMs = 45 * 1000): void {
   if (!env.DATABASE_URL) return;
   if (backupInterval) return;
 
@@ -177,4 +177,29 @@ export function startPeriodicBackup(intervalMs = 2 * 60 * 1000): void {
     void backupStorageToRemote();
   }, intervalMs);
   backupInterval.unref(); // não impede o processo de encerrar sozinho quando precisar
+}
+
+let immediateBackupTimer: NodeJS.Timeout | null = null;
+
+/**
+ * Agenda um backup "logo ali" (com debounce de alguns segundos) em vez de
+ * esperar o próximo ciclo periódico. Criado especificamente pro problema de
+ * sessão do WhatsApp corrompida (erros "Bad MAC" / "No matching sessions
+ * found" / loop de resync do app-state): o protocolo Signal avança as
+ * chaves de criptografia a cada mensagem trocada, então se o processo
+ * reiniciar e restaurar um backup ANTERIOR a essa troca, o estado local
+ * "volta no tempo" em relação ao que o WhatsApp já espera — e as próximas
+ * mensagens simplesmente falham ao decifrar. Isso não elimina o risco (sem
+ * disco persistente de verdade, sempre existe uma janela), mas encolhe
+ * bastante o intervalo entre "a sessão mudou" e "isso já tá salvo remoto".
+ * Debounce de 3s pra não martelar o Postgres numa rajada de eventos.
+ */
+export function scheduleImmediateBackup(debounceMs = 3_000): void {
+  if (!env.DATABASE_URL) return;
+  if (immediateBackupTimer) clearTimeout(immediateBackupTimer);
+  immediateBackupTimer = setTimeout(() => {
+    immediateBackupTimer = null;
+    void backupStorageToRemote();
+  }, debounceMs);
+  immediateBackupTimer.unref();
 }

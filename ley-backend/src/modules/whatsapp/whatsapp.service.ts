@@ -110,10 +110,26 @@ class WhatsAppService {
         syncFullHistory: false,
       });
 
-      this.socket.ev.on("creds.update", saveCreds);
+      this.socket.ev.on("creds.update", () => {
+        void saveCreds();
+        // credencial mudou (login, renovação de chave etc.) — dispara um
+        // backup logo ali em vez de esperar o próximo ciclo periódico. Ver
+        // scheduleImmediateBackup() pro porquê (evita a sessão "voltar no
+        // tempo" e corromper com erros tipo "Bad MAC").
+        void import("../../core/storage-sync.js")
+          .then(({ scheduleImmediateBackup }) => scheduleImmediateBackup())
+          .catch(() => {});
+      });
       this.socket.ev.on("connection.update", (update) => this.handleConnectionUpdate(update));
       this.socket.ev.on("messages.upsert", (upsert) => {
         void this.handleIncomingMessages(upsert as { messages: WAMessage[]; type: string });
+        // as chaves de sessão do Signal (pre-keys, ratchet) também avançam a
+        // cada mensagem recebida — não só em creds.update — então o gatilho
+        // de backup precisa cobrir isso também, senão a janela de risco
+        // continua grande mesmo com o backup de creds mais rápido.
+        void import("../../core/storage-sync.js")
+          .then(({ scheduleImmediateBackup }) => scheduleImmediateBackup())
+          .catch(() => {});
       });
       // "messaging-history.set" é o que o Baileys manda logo depois de
       // conectar, com o que foi perdido enquanto o servidor estava
