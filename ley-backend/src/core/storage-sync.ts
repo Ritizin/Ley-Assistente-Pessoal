@@ -1,4 +1,5 @@
 import { Pool } from "pg";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { env } from "../config/env.js";
@@ -24,6 +25,22 @@ const TRACKED_DB_FILE = "storage/ley.db";
 const TRACKED_SESSION_DIR = "storage/whatsapp-session";
 const TRACKED_MEDIA_DIR = "storage/whatsapp-media";
 const TRACKED_DIRS = [TRACKED_SESSION_DIR, TRACKED_MEDIA_DIR];
+
+// hash do último conteúdo já confirmado no Postgres, por arquivo (em
+// memória — reseta a cada boot, então o primeiro backup depois de subir
+// sempre reenvia tudo uma vez; os próximos ciclos é que ficam baratos).
+// Isso existe porque backupStorageToRemote() reenviava TODO arquivo
+// rastreado (incluindo whatsapp-media/, que pode ter vários MB de fotos e
+// vídeos de Status) a cada chamada — e ela é disparada a cada mensagem
+// recebida e a cada rotação de chave do Signal (creds.update), ou seja,
+// dezenas/centenas de vezes por hora numa conta ativa. Isso sozinho
+// consumia a banda de saída do Render (5GB/mês no free) em poucos dias,
+// mesmo sem nenhum arquivo novo — só reenviando os mesmos bytes de novo.
+const lastUploadedHash = new Map<string, string>();
+
+function hashOf(data: Buffer): string {
+  return crypto.createHash("sha1").update(data).digest("hex");
+}
 
 let pool: Pool | null = null;
 
@@ -125,16 +142,30 @@ export async function backupStorageToRemote(): Promise<void> {
   try {
     await ensureTable(p);
     const localRelPaths = new Set<string>();
+    let uploaded = 0;
+    let skipped = 0;
 
     for (const absPath of filesToBackup) {
       const relPath = path.relative(process.cwd(), absPath);
       localRelPaths.add(relPath);
       const data = fs.readFileSync(absPath);
+
+      // pula o upload se esse arquivo específico não mudou desde a última
+      // vez que subiu — é isso que evita reenviar a pasta de mídia inteira
+      // a cada mensagem recebida
+      const hash = hashOf(data);
+      if (lastUploadedHash.get(relPath) === hash) {
+        skipped++;
+        continue;
+      }
+
       await p.query(
         `INSERT INTO storage_backups (path, data, updated_at) VALUES ($1, $2, $3)
          ON CONFLICT (path) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at`,
         [relPath, data, Date.now()]
       );
+      lastUploadedHash.set(relPath, hash);
+      uploaded++;
     }
 
     // sem isso, mídia apagada localmente (ex: foto de status vencido depois
@@ -150,10 +181,14 @@ export async function backupStorageToRemote(): Promise<void> {
       const toDelete = rows.map((r) => r.path).filter((remotePath) => !localRelPaths.has(remotePath));
       if (toDelete.length > 0) {
         await p.query("DELETE FROM storage_backups WHERE path = ANY($1)", [toDelete]);
+        for (const relPath of toDelete) lastUploadedHash.delete(relPath);
       }
     }
 
-    logger.info({ files: filesToBackup.length }, "[storage-sync] backup de storage/ salvo no Postgres");
+    logger.info(
+      { totalFiles: filesToBackup.length, uploaded, skipped },
+      "[storage-sync] backup de storage/ sincronizado com o Postgres"
+    );
   } catch (err) {
     logger.error({ err }, "[storage-sync] falha ao salvar backup de storage/ no Postgres");
   }
