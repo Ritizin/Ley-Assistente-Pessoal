@@ -16,16 +16,16 @@ import {
   listMessagesByThread,
   getContactByThread,
   type IgDmMessageRow,
-} from "./instagram-dm.repository.js";
+} from "./instagram-dm.repository.js"; // ✅ VOLTEI COM .js
 
 export type InstagramDmStatus =
   | "disconnected"
   | "connecting"
-  | "checkpoint_required" // Instagram pediu confirmação (código por email/SMS) — precisa resolver manualmente
+  | "checkpoint_required"
   | "connected";
 
 const SESSION_FILE_NAME = "session.json";
-const POLL_INTERVAL_MS = 12_000; // API privada não tem push nativo sem o companion instagram_mqtt — poll frequente o bastante pra parecer "quase tempo real" sem abusar da conta
+const POLL_INTERVAL_MS = 12_000;
 const MAX_RECONNECT_DELAY_MS = 60_000;
 const BASE_RECONNECT_DELAY_MS = 3_000;
 
@@ -35,9 +35,6 @@ class InstagramDmService {
   private reconnectAttempts = 0;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private username: string | null = null;
-  // guarda o timestamp (em microssegundos, formato do IG) do item mais
-  // recente já processado por thread — evita reprocessar/duplicar mensagem
-  // antiga a cada poll
   private lastSeenItemTs = new Map<string, string>();
   private lastError: string | null = null;
 
@@ -72,8 +69,6 @@ class InstagramDmService {
       if (!restored) {
         await ig.simulate.preLoginFlow();
         await ig.account.login(env.INSTAGRAM_DM_USERNAME, env.INSTAGRAM_DM_PASSWORD);
-        // simulate.postLoginFlow não é obrigatório mas ajuda a parecer um
-        // login normal de app (reduz chance de checkpoint em contas novas)
         process.nextTick(async () => {
           try {
             await ig.simulate.postLoginFlow();
@@ -82,7 +77,6 @@ class InstagramDmService {
           }
         });
       } else {
-        // valida que a sessão restaurada ainda é válida de fato
         await ig.account.currentUser();
       }
 
@@ -94,27 +88,19 @@ class InstagramDmService {
       this.startPolling();
     } catch (err) {
       if (err instanceof IgCheckpointError || err instanceof IgLoginTwoFactorRequiredError) {
-        // login incomum: o Instagram quer confirmação (código por
-        // email/SMS ou 2FA). Não dá pra resolver isso sozinho sem alguém
-        // digitar o código — para aqui e avisa no painel em vez de ficar
-        // tentando de novo em loop (o que só aumentaria a suspeita da conta).
         this.lastError =
           "O Instagram pediu verificação (checkpoint/2FA) pra essa conta. Entre manualmente no app/site com leysatan uma vez pra confirmar, depois reinicie o módulo.";
         logger.error({ err }, "[instagram-dm] checkpoint/2FA exigido pelo Instagram");
         this.setStatus("checkpoint_required");
-        return; // não agenda retry automático — evita mais tentativas suspeitas
+        return;
       }
 
       if (err instanceof IgLoginBadPasswordError) {
-        // usuário/senha errados de fato (o Instagram confirma isso, não é
-        // falha de rede) — continuar tentando de novo em loop não vai
-        // resolver nunca e só arrisca a conta ser temporariamente travada
-        // por excesso de tentativas de login. Para aqui e avisa no painel.
         this.lastError =
           "O Instagram recusou a senha da conta @leysatan (usuário/senha incorretos). Confirme a senha atual entrando manualmente no app/site, atualize INSTAGRAM_DM_PASSWORD no .env e clique em conectar de novo.";
         logger.error({ err }, "[instagram-dm] usuário/senha incorretos");
-        this.setStatus("checkpoint_required"); // reaproveita o mesmo estado "parado, precisa de ação manual"
-        return; // não agenda retry automático
+        this.setStatus("checkpoint_required");
+        return;
       }
 
       this.lastError = err instanceof Error ? err.message : String(err);
@@ -133,11 +119,6 @@ class InstagramDmService {
     this.setStatus("disconnected");
   }
 
-  // tenta restaurar a sessão salva em disco (cookies + device state) —
-  // evita logar de novo a cada boot, o que é justamente o tipo de padrão
-  // (login incomum e frequente) que faz o Instagram disparar checkpoint.
-  // Retorna false se não havia sessão salva ou se o arquivo estava
-  // corrompido; nesses casos start() cai pro login normal usuário/senha.
   private async tryRestoreSession(ig: IgApiClient): Promise<boolean> {
     try {
       if (!fs.existsSync(this.sessionPath)) return false;
@@ -157,9 +138,6 @@ class InstagramDmService {
         const dir = path.resolve(env.INSTAGRAM_DM_SESSION_DIR);
         fs.mkdirSync(dir, { recursive: true });
         const serialized = await ig.state.serialize();
-        // remove info de versão da lib do estado salvo — se não, uma
-        // atualização do pacote instagram-private-api pode reclamar de
-        // incompatibilidade de "constants" salvo com versão antiga
         delete (serialized as { constants?: unknown }).constants;
         fs.writeFileSync(this.sessionPath, JSON.stringify(serialized), "utf-8");
       } catch (err) {
@@ -170,7 +148,7 @@ class InstagramDmService {
 
   private startPolling(): void {
     if (this.pollTimer) clearInterval(this.pollTimer);
-    this.pollInbox(); // já roda uma vez ao conectar, sem esperar o primeiro tick
+    this.pollInbox();
     this.pollTimer = setInterval(() => this.pollInbox(), POLL_INTERVAL_MS);
     this.pollTimer.unref();
   }
@@ -186,21 +164,16 @@ class InstagramDmService {
         const threadId = thread.thread_id;
         const isGroup = (thread.users?.length ?? 0) > 1;
 
-        // nome de exibição: título do thread (se o IG deu um, ex: grupo
-        // nomeado) ou o nome/usuário do outro participante em DM 1:1
         const otherUser = thread.users?.[0];
         const name = thread.thread_title || otherUser?.full_name || otherUser?.username || null;
         const username = otherUser?.username ?? null;
         upsertContact(threadId, name, username, isGroup);
 
-        const items = [...(thread.items ?? [])].reverse(); // vem mais novo -> mais antigo; queremos cronológico
+        const items = [...(thread.items ?? [])].reverse();
         const lastProcessedTs = this.lastSeenItemTs.get(threadId) ?? "0";
         let newestTs = lastProcessedTs;
 
         for (const item of items) {
-          // timestamp do IG é string numérica em microssegundos — dá pra
-          // comparar como string só porque tem largura fixa; aqui comparamos
-          // como número pra não depender disso.
           if (Number(item.timestamp) <= Number(lastProcessedTs)) continue;
 
           const fromMe = String(item.user_id) === String(this.ig.state.cookieUserId);
@@ -219,9 +192,9 @@ class InstagramDmService {
             text = item.text ?? null;
           } else if (item.item_type === "like") {
             type = "text";
-            text = "❤️"; // curtida rápida do IG (o famoso "coraçãozinho" de resposta)
+            text = "❤️";
           } else {
-            continue; // tipo ainda não suportado (voice, reel share, poll, etc.) — ignora por ora
+            continue;
           }
 
           saveMessage({
@@ -246,6 +219,7 @@ class InstagramDmService {
               createdAt: Math.floor(Number(item.timestamp) / 1000),
             });
 
+            // ✅ VOLTEI COM .js
             void import("../llm/instagram-dm-autopilot.js")
               .then(({ handleIncomingAutopilot }) => handleIncomingAutopilot(threadId, isGroup, text))
               .catch((err) => logger.error({ err }, "[instagram-dm] falha ao acionar autopilot"));
@@ -292,11 +266,6 @@ class InstagramDmService {
     });
   }
 
-  // broadcastText() devolve formatos diferentes dependendo da versão da lib
-  // e do tipo de resposta do Instagram: às vezes o objeto raiz (com um
-  // campo "payload" dentro), às vezes já o payload direto. Em vez de
-  // depender de um shape fixo (que quebra o typecheck), extrai o item_id
-  // tentando os dois formatos e cai pro id gerado localmente se nenhum bater.
   private static extractBroadcastItemId(sent: unknown): string | null {
     if (!sent || typeof sent !== "object") return null;
     const obj = sent as Record<string, unknown>;
@@ -329,7 +298,4 @@ class InstagramDmService {
 
 export const instagramDmService = new InstagramDmService();
 
-// exportado só pra o autopilot conseguir buscar histórico sem precisar
-// importar o repository direto (mantém a mesma indireção que o WhatsApp usa
-// via listMessagesByJid dentro do próprio módulo)
 export { listMessagesByThread, getContactByThread };
