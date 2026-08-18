@@ -60,6 +60,19 @@ const schema = z.object({
   // painel do Meta — confirma que a chamada de verificação é legítima
   INSTAGRAM_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
 
+  // Instagram DM (API privada não-oficial, via instagram-private-api) — essa
+  // é uma conta NORMAL da Ley (login usuário/senha, tipo o app de verdade),
+  // separada da conta profissional acima que usa a Graph API oficial. Dá pra
+  // ler/mandar DM e rodar autopilot com a mesma persona do WhatsApp. Como não
+  // é API oficial, o Instagram pode bloquear/desafiar login incomum — por
+  // isso a sessão fica persistida em disco (evita logar de novo a cada boot).
+  INSTAGRAM_DM_USERNAME: z.string().optional(),
+  INSTAGRAM_DM_PASSWORD: z.string().optional(),
+  INSTAGRAM_DM_SESSION_DIR: z.string().default("./storage/instagram-dm-session"),
+  // mesmo espírito do WHATSAPP_AUTOPILOT_ENABLED: default false de propósito
+  // — exige 1 clique explícito no painel antes da Ley falar sozinha por DM.
+  INSTAGRAM_DM_AUTOPILOT_ENABLED: z.coerce.boolean().default(false),
+
   // Google Home (Smart Device Management API — dispositivos Nest dentro de
   // estruturas do Google Home: termostatos, câmeras, campainhas, fechaduras).
   // Precisa de um projeto no Device Access Console (Google) além do OAuth no

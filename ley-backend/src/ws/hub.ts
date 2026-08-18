@@ -8,6 +8,7 @@ export type WsChannel =
   | "system"
   | "spotify"
   | "instagram"
+  | "instagram-dm"
   | "google-home";
 
 export interface WsEnvelope<T = unknown> {
