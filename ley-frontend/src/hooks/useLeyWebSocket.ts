@@ -24,6 +24,7 @@ export function useLeyWebSocket() {
   const gmailListeners = useRef<Set<(event: string, data: any) => void>>(new Set())
   const spotifyListeners = useRef<Set<(event: string, data: any) => void>>(new Set())
   const instagramListeners = useRef<Set<(event: string, data: any) => void>>(new Set())
+  const instagramDmListeners = useRef<Set<(event: string, data: any) => void>>(new Set())
   const googleHomeListeners = useRef<Set<(event: string, data: any) => void>>(new Set())
 
   const pushLog = useCallback((entry: Omit<LogEntry, 'id' | 'timestamp'>) => {
@@ -83,6 +84,8 @@ export function useLeyWebSocket() {
             spotifyListeners.current.forEach((fn) => fn(evt, eventData))
           } else if (channel === 'instagram') {
             instagramListeners.current.forEach((fn) => fn(evt, eventData))
+          } else if (channel === 'instagram-dm') {
+            instagramDmListeners.current.forEach((fn) => fn(evt, eventData))
           } else if (channel === 'google-home') {
             googleHomeListeners.current.forEach((fn) => fn(evt, eventData))
           } else if (channel === 'logs') {
@@ -142,6 +145,11 @@ export function useLeyWebSocket() {
     return () => { googleHomeListeners.current.delete(fn) }
   }, [])
 
+  const onInstagramDmEvent = useCallback((fn: (event: string, data: any) => void) => {
+    instagramDmListeners.current.add(fn)
+    return () => { instagramDmListeners.current.delete(fn) }
+  }, [])
+
   const clearLogs = useCallback(() => setLogs([]), [])
 
   return {
@@ -153,6 +161,7 @@ export function useLeyWebSocket() {
     onGmailEvent,
     onSpotifyEvent,
     onInstagramEvent,
+    onInstagramDmEvent,
     onGoogleHomeEvent,
   }
 }

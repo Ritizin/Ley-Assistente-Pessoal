@@ -4,6 +4,7 @@ import Sidebar, { type TabId } from './components/Sidebar'
 import ChatTab from './components/ChatTab'
 import TasksTab from './components/TasksTab'
 import WhatsAppTab from './components/WhatsAppTab'
+import InstagramDmTab from './components/InstagramDmTab'
 import ConnectionsTab from './components/ConnectionsTab'
 import NotificationsTab, {
   type NotificationGroup,
@@ -138,6 +139,7 @@ export default function App() {
     onGmailEvent,
     onSpotifyEvent,
     onInstagramEvent,
+    onInstagramDmEvent,
     onGoogleHomeEvent,
   } = useLeyWebSocket()
 
@@ -341,6 +343,9 @@ export default function App() {
                   setFocusName(null)
                 }}
               />
+            )}
+            {activeTab === 'instagram-dm' && (
+              <InstagramDmTab onInstagramDmEvent={onInstagramDmEvent} />
             )}
             {activeTab === 'connections' && (
               <ConnectionsTab

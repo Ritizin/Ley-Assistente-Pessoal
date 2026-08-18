@@ -1,8 +1,8 @@
-import { MessageSquare, ListChecks, Circle, MessageCircle, Bell, Plug, LogOut, FolderKanban, Laptop, Cloud } from 'lucide-react'
+import { MessageSquare, ListChecks, Circle, MessageCircle, Bell, Plug, LogOut, FolderKanban, Laptop, Cloud, Instagram } from 'lucide-react'
 import LeyAvatar from './LeyAvatar'
 import { getBackendMode, setBackendMode } from '../config/api'
 
-export type TabId = 'chat' | 'tasks' | 'whatsapp' | 'connections' | 'notifications' | 'projects'
+export type TabId = 'chat' | 'tasks' | 'whatsapp' | 'instagram-dm' | 'connections' | 'notifications' | 'projects'
 
 interface SidebarProps {
   active: TabId
@@ -23,6 +23,7 @@ const NAV_ITEMS: { id: TabId; label: string; icon: typeof MessageSquare }[] = [
   { id: 'projects', label: 'Projetos', icon: FolderKanban },
   { id: 'notifications', label: 'Notificações', icon: Bell },
   { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle },
+  { id: 'instagram-dm', label: 'Instagram', icon: Instagram },
   { id: 'connections', label: 'Conexões', icon: Plug },
   { id: 'tasks', label: 'Tarefas', icon: ListChecks },
 ]
