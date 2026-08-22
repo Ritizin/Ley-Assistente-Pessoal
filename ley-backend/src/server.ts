@@ -72,25 +72,46 @@ async function bootstrap() {
     bodyLimit: 15 * 1024 * 1024, // 15MB
   });
 
-  await app.register(cors, { origin: true });
-  await app.register(websocket, { options: { maxPayload: 5 * 1024 * 1024 } }); // 5MB (áudio)
-  await app.register(multipart, { limits: { fileSize: 50 * 1024 * 1024 } }); // 50MB (upload de áudio + anexos de arquivo no chat)
-  await app.register(fastifyStatic, {
-    root: path.join(__dirname, "..", "public"),
-    prefix: "/",
-  });
+  // BUG corrigido aqui: nenhum desses `app.register(...)` estava dentro de um
+  // try/catch — só o `app.listen()` mais abaixo tinha. Se qualquer módulo
+  // rejeitasse durante o registro (foi o caso real: o auth Postgres falhando
+  // por causa da cota de dados do Postgres estourada), a rejeição derrubava a
+  // função `bootstrap()` inteira ANTES de chegar no `app.listen()`. Como
+  // `bootstrap()` é chamada sem `await`/`.catch()` no fim do arquivo, isso
+  // virava uma unhandledRejection — o handler global só loga e "segue",
+  // então o processo Node continuava de pé só que SEM NUNCA ABRIR A PORTA. O
+  // Render não via nada escutando, tentava subir de novo e depois de algumas
+  // tentativas marcava a instância como falha ("Application exited early"),
+  // mesmo sem nenhum crash de verdade — o processo estava só travado num
+  // limbo silencioso.
+  //
+  // Agora qualquer falha aqui é pega, logada com clareza e o processo
+  // encerra com process.exit(1) — assim o Render vê uma falha real e
+  // reinicia de forma previsível, em vez de ficar preso sem escutar a porta.
+  try {
+    await app.register(cors, { origin: true });
+    await app.register(websocket, { options: { maxPayload: 5 * 1024 * 1024 } }); // 5MB (áudio)
+    await app.register(multipart, { limits: { fileSize: 50 * 1024 * 1024 } }); // 50MB (upload de áudio + anexos de arquivo no chat)
+    await app.register(fastifyStatic, {
+      root: path.join(__dirname, "..", "public"),
+      prefix: "/",
+    });
 
-  await app.register(healthRoutes);
-  await app.register(wsRoutes);
-  await app.register(registerLlmModule);
-  await app.register(registerTtsModule);
-  await app.register(registerWhatsAppModule);
-  await app.register(registerGmailModule);
-  await app.register(registerSpotifyModule);
-  await app.register(registerInstagramModule);
-  await app.register(registerGoogleHomeModule);
-  await app.register(registerCalendarModule);
-  await app.register(registerAuthModule);
+    await app.register(healthRoutes);
+    await app.register(wsRoutes);
+    await app.register(registerLlmModule);
+    await app.register(registerTtsModule);
+    await app.register(registerWhatsAppModule);
+    await app.register(registerGmailModule);
+    await app.register(registerSpotifyModule);
+    await app.register(registerInstagramModule);
+    await app.register(registerGoogleHomeModule);
+    await app.register(registerCalendarModule);
+    await app.register(registerAuthModule);
+  } catch (err) {
+    logger.error({ err }, "falha ao registrar módulos do servidor — encerrando processo");
+    process.exit(1);
+  }
 
   // encaminha logs do fastify/pino para o canal "logs" do painel web
   const originalWrite = process.stdout.write.bind(process.stdout);

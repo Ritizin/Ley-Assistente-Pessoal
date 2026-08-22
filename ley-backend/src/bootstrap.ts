@@ -1,4 +1,5 @@
 import { restoreStorageFromRemote, startPeriodicBackup } from "./core/storage-sync.js";
+import { logger } from "./core/logger.js";
 
 // Esse arquivo (não server.ts) é o entrypoint de verdade — ver package.json
 // (scripts.dev e scripts.start). O motivo de existir: llm/db.ts abre o
@@ -13,4 +14,12 @@ async function main(): Promise<void> {
   startPeriodicBackup();
 }
 
-void main();
+// Sem o catch aqui, um erro em main() (ex: falha ao importar ./server.js)
+// virava uma unhandledRejection silenciosa — mesmo problema de fundo do bug
+// corrigido em server.ts: o processo "segue rodando" sem nunca ter chegado
+// perto de abrir a porta, e o Render acha que é um crash comum quando na
+// verdade nunca havia nada de pé.
+main().catch((err) => {
+  logger.error({ err }, "falha fatal no bootstrap — encerrando processo");
+  process.exit(1);
+});

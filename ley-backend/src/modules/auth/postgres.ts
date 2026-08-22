@@ -22,21 +22,41 @@ export async function createPostgresAuthDatabase() {
 
   const client = pool;
 
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS auth_users (
-      id SERIAL PRIMARY KEY,
-      provider TEXT NOT NULL DEFAULT 'google',
-      google_id TEXT,
-      email TEXT NOT NULL UNIQUE,
-      name TEXT,
-      picture TEXT,
-      created_at BIGINT NOT NULL,
-      updated_at BIGINT NOT NULL
-    );
+  // BUG encontrado: essa query roda no boot, dentro de app.register(registerAuthModule)
+  // no bootstrap() do server.ts — que não tinha try/catch em volta dos registros
+  // (só em volta do app.listen()). Se o Postgres estiver fora do ar ou (como
+  // aconteceu de verdade) com a cota de transferência de dados estourada, essa
+  // query rejeita, a rejeição sobe até o bootstrap() e vira uma unhandledRejection
+  // ANTES do app.listen() ser chamado — o processo "segue rodando" (o handler
+  // global só loga) mas nunca abre a porta. Pro Render isso é indistinguível de
+  // um crash: ele nunca vê o serviço escutando, tenta subir de novo e desiste
+  // depois de algumas tentativas ("Instance failed").
+  //
+  // Por isso agora esse erro é pego aqui: se o Postgres não responder, propaga
+  // um erro específico pra createAuthDatabase() decidir o fallback (SQLite
+  // local) em vez de derrubar o boot inteiro por causa de uma feature (login
+  // com Google) que não deveria travar o resto do app.
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS auth_users (
+        id SERIAL PRIMARY KEY,
+        provider TEXT NOT NULL DEFAULT 'google',
+        google_id TEXT,
+        email TEXT NOT NULL UNIQUE,
+        name TEXT,
+        picture TEXT,
+        created_at BIGINT NOT NULL,
+        updated_at BIGINT NOT NULL
+      );
 
-    CREATE INDEX IF NOT EXISTS idx_auth_users_google_id ON auth_users(google_id);
-    CREATE INDEX IF NOT EXISTS idx_auth_users_email ON auth_users(email);
-  `);
+      CREATE INDEX IF NOT EXISTS idx_auth_users_google_id ON auth_users(google_id);
+      CREATE INDEX IF NOT EXISTS idx_auth_users_email ON auth_users(email);
+    `);
+  } catch (err) {
+    await pool.end().catch(() => {});
+    logger.error({ err }, "[auth] Postgres indisponível ao inicializar auth_users — caindo para SQLite local");
+    throw new Error("postgres_auth_unavailable");
+  }
 
   return {
     client,
